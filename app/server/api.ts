@@ -59,7 +59,9 @@ async function dispatch(request: Request, { db, bucket, user, localPreview }: Ap
     if (request.headers.get("origin") !== url.origin) fail(403, "Origem da requisição inválida.");
   }
   if (user) {
-    await run("INSERT OR IGNORE INTO users(id,handle,name,created_at) VALUES(?,?,?,?)", me, `pessoa_${me.replace(/[^a-zA-Z0-9]/g, "").slice(0, 20)}_${await shortHash(me)}`, user.name.slice(0, 60), now());
+    const handleBase = me.replace(/[^a-zA-Z0-9_]/g, "").toLowerCase().slice(0, 14) || "user";
+    const defaultHandle = `pessoa_${handleBase}_${await shortHash(me)}`;
+    await run("INSERT OR IGNORE INTO users(id,handle,name,created_at) VALUES(?,?,?,?)", me, defaultHandle, user.name.slice(0, 60), now());
   }
   if (path === "bootstrap" && method === "GET") {
     const profile = user ? await one("SELECT * FROM users WHERE id=?", me) : null;
@@ -75,9 +77,12 @@ async function dispatch(request: Request, { db, bucket, user, localPreview }: Ap
       me, me, me, ...profileInterests.flatMap(value => [`%${value}%`, `%${value}%`]), me, me, me);
     const groups = await all(`SELECT c.*, (SELECT COUNT(*) FROM memberships WHERE community_id=c.id) AS members,
       EXISTS(SELECT 1 FROM memberships WHERE community_id=c.id AND user_id=?) AS joined FROM communities c ORDER BY members DESC,c.created_at LIMIT 100`, me);
+    const joinedGroups = me ? await all(`SELECT c.*, (SELECT COUNT(*) FROM memberships WHERE community_id=c.id) AS members,
+      1 AS joined FROM communities c WHERE EXISTS(SELECT 1 FROM memberships WHERE community_id=c.id AND user_id=?) ORDER BY c.created_at DESC`, me) : [];
+    const communities = Array.from(new Map([...groups, ...joinedGroups].map(group => [group.id, group])).values());
     const unread = me ? await one("SELECT COUNT(*) AS n FROM notifications WHERE user_id=? AND read=0", me) : { n: 0 };
     const unreadMessages = me ? await one("SELECT COUNT(*) AS n FROM messages WHERE to_id=? AND read=0 AND NOT EXISTS(SELECT 1 FROM blocks WHERE (user_id=? AND blocked_id=messages.from_id) OR (user_id=messages.from_id AND blocked_id=?))", me, me, me) : { n: 0 };
-    return json({ me: profile, users: people, communities: groups, unread: unread?.n, unreadMessages: unreadMessages?.n, localPreview: !!localPreview });
+    return json({ me: profile, users: people, communities, unread: unread?.n, unreadMessages: unreadMessages?.n, localPreview: !!localPreview });
   }
   if (path === "feed" && method === "GET") {
     const viewer = me ? await one<{ interests?: string }>("SELECT interests FROM users WHERE id=?", me) : null;
@@ -126,10 +131,25 @@ async function dispatch(request: Request, { db, bucket, user, localPreview }: Ap
       AND NOT EXISTS(SELECT 1 FROM blocks WHERE (user_id=? AND blocked_id=t.from_id) OR (user_id=t.from_id AND blocked_id=?)) ORDER BY t.created_at DESC LIMIT 100`, target, me, me, me, me);
     return json({ profile, testimonials });
   }
+  if (path.startsWith("communities/") && method === "GET") {
+    const target = decodeURIComponent(path.slice("communities/".length));
+    const community = await one(`SELECT c.*, (SELECT COUNT(*) FROM memberships WHERE community_id=c.id) AS members,
+      EXISTS(SELECT 1 FROM memberships WHERE community_id=c.id AND user_id=?) AS joined FROM communities c WHERE c.id=?`, me, target);
+    if (!community) fail(404, "Comunidade não encontrada.");
+    return json({ community });
+  }
   if (path.startsWith("comments/") && method === "GET") {
     const target = decodeURIComponent(path.slice(9)); await getPost(target);
-    return json(await all(`SELECT c.*,u.name,u.handle,u.avatar FROM comments c JOIN users u ON u.id=c.user_id WHERE c.post_id=?
-      AND NOT EXISTS(SELECT 1 FROM blocks WHERE (user_id=? AND blocked_id=c.user_id) OR (user_id=c.user_id AND blocked_id=?)) ORDER BY c.created_at LIMIT 200`, target, me, me));
+    const rawCursor = q.get("cursor");
+    const cursor = rawCursor === null || rawCursor === "" ? undefined : Number(rawCursor);
+    if (cursor !== undefined && (!Number.isSafeInteger(cursor) || cursor < 0)) fail(400, "Cursor inválido.");
+    const cursorFilter = cursor === undefined ? "" : " AND c.rowid<?";
+    const args = cursor === undefined ? [target, me, me] : [target, me, me, cursor];
+    const rows = await all(`SELECT c.*, c.rowid AS cursor,u.name,u.handle,u.avatar FROM comments c JOIN users u ON u.id=c.user_id WHERE c.post_id=?
+      AND NOT EXISTS(SELECT 1 FROM blocks WHERE (user_id=? AND blocked_id=c.user_id) OR (user_id=c.user_id AND blocked_id=?))${cursorFilter} ORDER BY c.rowid DESC LIMIT 201`, ...args);
+    const hasMore = rows.length > 200;
+    const comments = rows.slice(0, 200).reverse();
+    return json({ comments, cursor: hasMore ? rows[199].cursor : null });
   }
   if (path === "messages" && method === "GET") {
     requireUser(); const peer = q.get("peer");
