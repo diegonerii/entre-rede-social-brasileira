@@ -63,12 +63,16 @@ async function dispatch(request: Request, { db, bucket, user, localPreview }: Ap
   }
   if (path === "bootstrap" && method === "GET") {
     const profile = user ? await one("SELECT * FROM users WHERE id=?", me) : null;
+    const profileInterests = String(profile?.interests || "").split(",").map(value => value.trim().toLowerCase()).filter(Boolean).slice(0, 8);
+    const affinitySql = profileInterests.length ? profileInterests.map(() => "CASE WHEN lower(COALESCE(u.interests,'')) LIKE ? OR lower(COALESCE(u.bio,'')) LIKE ? THEN 1 ELSE 0 END").join(" + ") : "0";
     const people = await all(`SELECT u.*, EXISTS(SELECT 1 FROM follows WHERE follower_id=? AND following_id=u.id) AS isFollowing,
       (SELECT COUNT(*) FROM follows WHERE following_id=u.id) AS followers,
       (SELECT COUNT(*) FROM follows a JOIN follows b ON a.following_id=b.following_id WHERE a.follower_id=? AND b.follower_id=u.id) +
-      (SELECT COUNT(*) FROM memberships a JOIN memberships b ON a.community_id=b.community_id WHERE a.user_id=? AND b.user_id=u.id) AS common
+      (SELECT COUNT(*) FROM memberships a JOIN memberships b ON a.community_id=b.community_id WHERE a.user_id=? AND b.user_id=u.id) AS common,
+      ${affinitySql} AS affinity
       FROM users u WHERE u.id!=? AND NOT EXISTS(SELECT 1 FROM blocks WHERE (user_id=? AND blocked_id=u.id) OR (user_id=u.id AND blocked_id=?))
-      ORDER BY isFollowing ASC, common DESC, u.created_at ASC LIMIT 60`, me, me, me, me, me, me);
+      ORDER BY isFollowing ASC, affinity DESC, common DESC, u.created_at ASC LIMIT 60`,
+      me, me, me, ...profileInterests.flatMap(value => [`%${value}%`, `%${value}%`]), me, me, me);
     const groups = await all(`SELECT c.*, (SELECT COUNT(*) FROM memberships WHERE community_id=c.id) AS members,
       EXISTS(SELECT 1 FROM memberships WHERE community_id=c.id AND user_id=?) AS joined FROM communities c ORDER BY members DESC,c.created_at LIMIT 100`, me);
     const unread = me ? await one("SELECT COUNT(*) AS n FROM notifications WHERE user_id=? AND read=0", me) : { n: 0 };
@@ -76,7 +80,20 @@ async function dispatch(request: Request, { db, bucket, user, localPreview }: Ap
     return json({ me: profile, users: people, communities: groups, unread: unread?.n, unreadMessages: unreadMessages?.n, localPreview: !!localPreview });
   }
   if (path === "feed" && method === "GET") {
-    const args: any[] = [me, me, me, me, me];
+    const viewer = me ? await one<{ interests?: string }>("SELECT interests FROM users WHERE id=?", me) : null;
+    const interestTerms = String(viewer?.interests || "").split(",").map(value => value.trim().toLowerCase()).filter(Boolean).slice(0, 8);
+    const relevanceArgs: any[] = [];
+    let relevance = "0";
+    if (me) {
+      relevance = "(CASE WHEN p.user_id=? THEN 4 ELSE 0 END + CASE WHEN EXISTS(SELECT 1 FROM follows WHERE follower_id=? AND following_id=p.user_id) THEN 6 ELSE 0 END + CASE WHEN EXISTS(SELECT 1 FROM memberships mine JOIN memberships shared ON shared.community_id=mine.community_id WHERE mine.user_id=? AND shared.user_id=? AND shared.community_id=p.community_id) THEN 3 ELSE 0 END";
+      relevanceArgs.push(me, me, me, me);
+      for (const term of interestTerms) {
+        relevance += " + CASE WHEN lower(COALESCE(p.tags,'')) LIKE ? OR lower(COALESCE(p.body,'')) LIKE ? OR lower(COALESCE(p.title,'')) LIKE ? THEN 2 ELSE 0 END";
+        relevanceArgs.push(`%${term}%`, `%${term}%`, `%${term}%`);
+      }
+      relevance += ")";
+    }
+    const args: any[] = [...relevanceArgs, me, me, me, me, me];
     let where = "NOT EXISTS(SELECT 1 FROM blocks WHERE (user_id=? AND blocked_id=p.user_id) OR (user_id=p.user_id AND blocked_id=?))";
     if (q.get("userId")) { where += " AND (p.user_id=? OR EXISTS(SELECT 1 FROM reposts WHERE post_id=p.id AND user_id=?))"; args.push(q.get("userId"), q.get("userId")); }
     else if (q.get("tab") === "following") { where += " AND (p.user_id=? OR EXISTS(SELECT 1 FROM follows WHERE follower_id=? AND following_id=p.user_id) OR EXISTS(SELECT 1 FROM reposts r JOIN follows f ON f.following_id=r.user_id WHERE r.post_id=p.id AND f.follower_id=?))"; args.push(me, me, me); }
@@ -86,6 +103,7 @@ async function dispatch(request: Request, { db, bucket, user, localPreview }: Ap
     if (q.get("q")) { where += " AND (p.body LIKE ? ESCAPE '\\' OR p.title LIKE ? ESCAPE '\\' OR p.tags LIKE ? ESCAPE '\\')"; const term = `%${text(q.get("q"), 100).replace(/[\\%_]/g, "\\$&")}%`; args.push(term, term, term); }
     if (q.get("cursor")) { const cursor = Number(q.get("cursor")); if (!Number.isSafeInteger(cursor) || cursor < 0) fail(400, "Cursor inválido."); where += " AND p.rowid<?"; args.push(cursor); }
     const rows = await all(`SELECT p.*, p.rowid AS cursor,u.name,u.handle,u.avatar,c.name AS community_name,
+      ${relevance} AS relevance,
       (SELECT COUNT(*) FROM reactions WHERE post_id=p.id AND value=1) AS likes,
       (SELECT COUNT(*) FROM reactions WHERE post_id=p.id AND value=-1) AS dislikes,
       (SELECT COUNT(*) FROM comments WHERE post_id=p.id) AS comments,
@@ -93,7 +111,8 @@ async function dispatch(request: Request, { db, bucket, user, localPreview }: Ap
       COALESCE((SELECT value FROM reactions WHERE post_id=p.id AND user_id=?),0) AS reaction,
       EXISTS(SELECT 1 FROM reposts WHERE post_id=p.id AND user_id=?) AS reposted,
       EXISTS(SELECT 1 FROM bookmarks WHERE post_id=p.id AND user_id=?) AS saved
-      FROM posts p JOIN users u ON u.id=p.user_id LEFT JOIN communities c ON c.id=p.community_id WHERE ${where} ORDER BY p.rowid DESC LIMIT 21`, ...args);
+      FROM posts p JOIN users u ON u.id=p.user_id LEFT JOIN communities c ON c.id=p.community_id WHERE ${where}
+      ORDER BY relevance DESC, p.rowid DESC LIMIT 21`, ...args);
     const hasMore = rows.length > 20;
     return json({ posts: rows.slice(0, 20), cursor: hasMore ? rows[19].cursor : null });
   }

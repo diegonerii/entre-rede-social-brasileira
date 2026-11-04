@@ -43,6 +43,26 @@ node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1
 
 O schema fica em `db/schema.ts` e as migrações em `drizzle/`. A identidade de produção é fornecida pelo login da plataforma, usando `oai-authenticated-user-id` como chave estável. O conteúdo de posts e uploads é público por design; mensagens e relações de bloqueio são verificadas no servidor. Não há segredos no repositório.
 
+## Deploy na Magalu Cloud
+
+O caminho de runtime equivalente a um serviço de container gerenciado é Kubernetes + Container Registry. O container expõe a porta `8787`, executa o worker Vinext/Wrangler e persiste o D1/R2 local do runtime no volume `/data`. O manifesto de referência está em `infra/magalu/kubernetes.yaml`.
+
+Com a conta Magalu Cloud ativada e Docker, `mgc` e `kubectl` configurados:
+
+```powershell
+docker build -t container-registry.br-se1.magalu.cloud/entre/entre:latest .
+mgc container-registry registries create --name entre
+mgc container-registry credentials get
+docker login container-registry.br-se1.magalu.cloud
+docker push container-registry.br-se1.magalu.cloud/entre/entre:latest
+mgc kubernetes cluster kubeconfig get --cluster-id <cluster-id> > kubeconfig.yaml
+$env:KUBECONFIG = "$(Resolve-Path .\\kubeconfig.yaml)"
+kubectl apply -f infra/magalu/kubernetes.yaml
+kubectl -n entre get service entre
+```
+
+Para produção com múltiplas réplicas, substitua o armazenamento local por DBaaS e Object Storage da Magalu Cloud. O manifesto inicial usa uma réplica e PVC para manter o estado do MVP sem esconder essa limitação.
+
 ## Estrutura
 
 - `app/social-app.tsx`: experiência do produto e navegação.
