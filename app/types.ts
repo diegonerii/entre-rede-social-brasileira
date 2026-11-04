@@ -1,0 +1,9 @@
+export type Person = { id: string; handle: string; name: string; bio: string; avatar: string; cover: string; location: string; interests: string; following?: number; followers?: number; postCount?: number; isFollowing?: number; common?: number };
+export type Community = { id: string; name: string; description: string; category: string; cover: string; color: string; members: number; joined: number; owner_id: string | null };
+export type Post = { id: string; user_id: string; community_id: string | null; kind: string; title: string; body: string; media: string; tags: string; created_at: number; name: string; handle: string; avatar: string; community_name: string | null; likes: number; dislikes: number; comments: number; reposts: number; reaction: number; reposted: number; saved: number; reposted_by?: string };
+export type Comment = { id: string; body: string; created_at: number; user_id: string; name: string; handle: string; avatar: string };
+export type Testimonial = Comment & { status: string; from_id: string; to_id: string };
+export type Message = { id: string; from_id: string; to_id: string; body: string; created_at: number; read: number };
+export type Conversation = Person & { lastBody: string; lastAt: number; unread: number };
+export type Notice = { id: string; actor_id: string; kind: string; target_id: string; read: number; created_at: number; name: string; avatar: string; handle: string };
+export type Bootstrap = { me: Person | null; users: Person[]; communities: Community[]; unread: number; unreadMessages: number; localPreview: boolean };
