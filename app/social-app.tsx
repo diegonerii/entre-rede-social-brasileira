@@ -167,7 +167,7 @@ function SimpleTextForm({ label, placeholder, button, max, submit }: { label: st
   return <form className="form-stack" onSubmit={async e => { e.preventDefault(); if (!value.trim() || busy) return; setBusy(true); if (await submit(value)) setValue(""); setBusy(false); }}><label>{label}<textarea required maxLength={max} placeholder={placeholder} value={value} onChange={e => setValue(e.target.value)} rows={5} /></label><div className="form-bottom"><span>{value.length}/{max}</span><button className="primary" disabled={busy || !value.trim()}>{busy && <LoaderCircle className="spin" size={16} />}{button}</button></div></form>;
 }
 function CommentsModal({ post, close }: { post: Post; close: () => void }) {
-  const { revision, requireAuth, run, data } = useApp();
+  const { requireAuth, run, data } = useApp();
   const [comments, setComments] = useState<Comment[] | null>(null), [cursor, setCursor] = useState<number | null>(null), [loadingMore, setLoadingMore] = useState(false), [error, setError] = useState("");
   const load = useCallback(async (nextCursor?: number | null, replace = false) => {
     const suffix = nextCursor ? `?cursor=${nextCursor}` : "";
@@ -180,7 +180,7 @@ function CommentsModal({ post, close }: { post: Post; close: () => void }) {
     if (replace || nextCursor !== null && nextCursor !== undefined) setCursor(result.cursor);
   }, [post.id]);
   useEffect(() => { let live = true; setComments(null); setCursor(null); setError(""); load(null, true).catch(e => { if (live) setError(e.message); }); return () => { live = false; }; }, [load]);
-  useEffect(() => { if (!revision) return; let live = true; load(null).catch(e => { if (live) setError(e.message); }); return () => { live = false; }; }, [revision, load]);
+  useEffect(() => { const timer = setInterval(() => { if (!document.hidden) load(null).catch(e => setError(e.message)); }, 10000); return () => clearInterval(timer); }, [load]);
   const loadOlder = async () => { if (!cursor || loadingMore) return; setLoadingMore(true); try { await load(cursor); } catch (e) { setError((e as Error).message); } finally { setLoadingMore(false); } };
   const submit = async (body: string) => { const ok = await run(() => api("comments", { postId: post.id, body }), "Comentário publicado."); if (ok) { try { await load(null); } catch { /* keep the newly submitted form usable if refresh is delayed */ } } return ok; };
   return <Modal title="A conversa continua." close={close}><div className="comments-list"><p className="comment-context">{post.body.slice(0, 180)}</p>{error ? <ErrorBox message={error} /> : !comments ? <Loading /> : <>{!!cursor && <button className="secondary load-more-comments" disabled={loadingMore} onClick={loadOlder}>{loadingMore ? <LoaderCircle className="spin" size={17} /> : "Ver comentários anteriores"}</button>}{comments.length ? comments.map(c => <div className="comment" key={c.id}><Avatar person={c} size="small" onClick={() => { close(); navigate(`profile/${c.user_id}`); }} /><div><strong>{c.name} <time>{ago(c.created_at)}</time></strong><p>{c.body}</p></div></div>) : <p className="muted">A conversa está aberta. Seja a primeira pessoa a comentar.</p>}</>}</div>{data.me ? <SimpleTextForm label="Seu comentário" placeholder="Acrescente algo à conversa…" button="Comentar" max={2000} submit={submit} /> : <button className="primary modal-login" onClick={requireAuth}>Entrar para comentar</button>}</Modal>;
@@ -215,6 +215,7 @@ function CommunityPage({ id }: { id: string }) {
   const { data, revision, compose } = useApp();
   const [community, setCommunity] = useState<Community | null>(() => data.communities.find(c => c.id === id) || null), [loading, setLoading] = useState(true), [error, setError] = useState("");
   useEffect(() => { let live = true; setLoading(true); setError(""); api<{ community: Community }>(`communities/${encodeURIComponent(id)}`).then(result => { if (live) { setCommunity(result.community); setLoading(false); } }).catch(e => { if (live) { setCommunity(null); setError(e.message); setLoading(false); } }); return () => { live = false; }; }, [id, revision]);
+  useEffect(() => { const latest = data.communities.find(item => item.id === id); if (latest) setCommunity(current => current ? { ...current, ...latest } : latest); }, [data.communities, id]);
   const c = community;
   if (loading && !c) return <Loading />;
   if (error || !c) return <ErrorBox message={error || "Comunidade não encontrada."} />;

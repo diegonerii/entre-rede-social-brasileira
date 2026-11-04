@@ -12,4 +12,4 @@ ENV PORT=8787
 COPY --from=build /app /app
 RUN mkdir -p /data
 EXPOSE 8787
-CMD ["npm", "run", "start:magalu"]
+CMD ["node", "scripts/start-magalu.mjs"]
