@@ -17,7 +17,7 @@ Uma rede social brasileira para textos, fotografias, vídeos, conversas e comuni
 
 ## Identidade visual
 
-O design segue uma direção editorial e brasileira: marfim, verde profundo, verde-lima suave, serif expressiva para títulos e DM Sans para leitura. A marca usa “entre” como uma ideia de espaço e encontro, com microtipografia em português e sem emojis de sistema ou mensagens genéricas de template.
+O design segue uma direção editorial e brasileira: marfim, verde profundo, verde-lima suave, Manrope para títulos e DM Sans para leitura. A marca usa “entre” como uma ideia de espaço e encontro, com microtipografia em português e sem emojis de sistema ou mensagens genéricas de template.
 
 ## Desenvolvimento local
 
@@ -45,7 +45,7 @@ O schema fica em `db/schema.ts` e as migrações em `drizzle/`. A identidade de 
 
 ## Deploy na Magalu Cloud
 
-O caminho de runtime equivalente a um serviço de container gerenciado é Kubernetes + Container Registry. O container expõe a porta `8787`, executa o worker Vinext/Wrangler e persiste o D1/R2 local do runtime no volume `/data`. O manifesto de referência está em `infra/magalu/kubernetes.yaml`.
+O caminho de runtime equivalente a um serviço de container gerenciado é Kubernetes + Container Registry. O container expõe a porta `8787`, inicializa as migrações no mesmo volume `/data` antes de servir e persiste o D1/R2 local do runtime nesse volume. O manifesto de referência está em `infra/magalu/kubernetes.yaml`.
 
 Com a conta Magalu Cloud ativada e Docker, `mgc` e `kubectl` configurados:
 
@@ -60,6 +60,14 @@ $env:KUBECONFIG = "$(Resolve-Path .\\kubeconfig.yaml)"
 kubectl apply -f infra/magalu/kubernetes.yaml
 kubectl -n entre get service entre
 ```
+
+O serviço permanece `ClusterIP` de propósito: ele não deve ser exposto diretamente à internet. Coloque um gateway de identidade na frente, remova qualquer `oai-*` recebido do cliente e injete os cabeçalhos verificados junto de `x-entre-identity-signature`. A assinatura é HMAC-SHA256, em Base64URL, sobre `{"userId":"...","email":"...","fullName":"..."}`. Crie o segredo fora do repositório antes de aplicar o Deployment:
+
+```powershell
+kubectl -n entre create secret generic entre-identity-gateway --from-literal=hmac-secret='<valor-fornecido-ao-gateway>'
+```
+
+Sem esse gateway e esse segredo, a aplicação continua pública apenas para leitura e rejeita ações autenticadas, evitando que cabeçalhos forjados representem outra pessoa.
 
 Para produção com múltiplas réplicas, substitua o armazenamento local por DBaaS e Object Storage da Magalu Cloud. O manifesto inicial usa uma réplica e PVC para manter o estado do MVP sem esconder essa limitação.
 

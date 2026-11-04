@@ -96,30 +96,59 @@ function HomeFeed() {
 }
 function Feed({ filter = "", empty = "Ainda não há publicações por aqui." }: { filter?: string; empty?: string }) {
   const { revision } = useApp();
-  const [posts, setPosts] = useState<Post[] | null>(null), [cursor, setCursor] = useState<number | null>(null), [error, setError] = useState(""), [more, setMore] = useState(false), [retry, setRetry] = useState(0);
-  useEffect(() => { let live = true; setPosts(null); setCursor(null); setError(""); api<{ posts: Post[]; cursor: number | null }>(`feed?${filter}`).then(d => { if (live) { setPosts(d.posts); setCursor(d.cursor); } }).catch(e => { if (live) setError(e.message); }); return () => { live = false; }; }, [filter, retry]);
+  type FeedResponse = { posts: Post[]; cursor: string | null };
+  const feedUrl = (nextCursor?: string | null) => `feed?${filter}${nextCursor ? `&cursor=${encodeURIComponent(nextCursor)}` : ""}`;
+  const [posts, setPosts] = useState<Post[] | null>(null), [cursor, setCursor] = useState<string | null>(null), [error, setError] = useState(""), [more, setMore] = useState(false), [retry, setRetry] = useState(0);
+  useEffect(() => { let live = true; setPosts(null); setCursor(null); setError(""); api<FeedResponse>(feedUrl()).then(d => { if (live) { setPosts(d.posts); setCursor(d.cursor); } }).catch(e => { if (live) setError(e.message); }); return () => { live = false; }; }, [filter, retry]);
   useEffect(() => {
-    if (!revision || !posts?.length) return;
+    if (!revision || !posts) return;
     let live = true;
-    api<{ posts: Post[]; cursor: number | null }>(`feed?${filter}`).then(d => {
+    const boundaryId = posts.at(-1)?.id;
+    (async () => {
+      let page = await api<FeedResponse>(feedUrl());
+      const refreshed: Post[] = [];
+      let reachedBoundary = !boundaryId;
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        refreshed.push(...page.posts);
+        if (boundaryId && page.posts.some(post => post.id === boundaryId)) { reachedBoundary = true; break; }
+        if (!page.cursor) { reachedBoundary = true; break; }
+        page = await api<FeedResponse>(feedUrl(page.cursor));
+      }
       if (!live) return;
       setPosts(current => {
-        if (!current) return d.posts;
-        const fresh = new Map(d.posts.map(post => [post.id, post]));
-        const updated = current.map(post => fresh.get(post.id) || post);
-        const existing = new Set(current.map(post => post.id));
-        return [...d.posts.filter(post => !existing.has(post.id)), ...updated];
+        if (!current) return refreshed;
+        const fresh = new Map(refreshed.map(post => [post.id, post]));
+        const refreshedIds = new Set(refreshed.map(post => post.id));
+        const retained = current.filter(post => !reachedBoundary || refreshedIds.has(post.id)).map(post => fresh.get(post.id) || post);
+        const existing = new Set(retained.map(post => post.id));
+        return [...refreshed.filter(post => !existing.has(post.id)), ...retained];
       });
-    }).catch(() => { /* The existing page remains usable if a background refresh fails. */ });
+      setCursor(page.cursor);
+    })().catch(() => { /* The existing page remains usable if a background refresh fails. */ });
     return () => { live = false; };
   }, [revision]);
-  const load = async () => { setMore(true); try { const d = await api<{ posts: Post[]; cursor: number | null }>(`feed?${filter}&cursor=${cursor}`); setPosts(p => [...(p || []), ...d.posts.filter(n => !p?.some(o => o.id === n.id))]); setCursor(d.cursor); } catch (e) { setError((e as Error).message); } finally { setMore(false); } };
+  const load = async () => { if (!cursor) return; setMore(true); try { const d = await api<FeedResponse>(feedUrl(cursor)); setPosts(p => [...(p || []), ...d.posts.filter(n => !p?.some(o => o.id === n.id))]); setCursor(d.cursor); } catch (e) { setError((e as Error).message); } finally { setMore(false); } };
   return <div className="feed">{error && <ErrorBox message={error} retry={() => setRetry(v => v + 1)} />}{!posts && !error ? <Loading /> : posts?.length ? <>{posts.map(p => <PostCard post={p} key={p.id} />)}{cursor && <button className="load-more secondary" disabled={more} onClick={load}>{more ? <LoaderCircle className="spin" size={18} /> : "Ver mais publicações"}</button>}<p className="feed-end">Você chegou até aqui. Respire um pouco. <Leaf size={14} /></p></> : !error && <Empty title={empty}><p>Explore pessoas e comunidades para descobrir novas conversas.</p><button className="text-button" onClick={() => navigate("explore")}>Explorar a entre <ArrowUpRight size={16} /></button></Empty>}</div>;
 }
 function PostCard({ post: p }: { post: Post }) {
   const { data, requireAuth, run, toast } = useApp();
   const [comments, setComments] = useState(false), [menu, setMenu] = useState(false), [report, setReport] = useState(false), [remove, setRemove] = useState(false), [busy, setBusy] = useState(false);
-  const action = async (path: string, body: unknown, msg?: string) => { if (!requireAuth() || busy) return; setBusy(true); await run(() => api(path, body), msg); setBusy(false); };
+  const [reaction, setReaction] = useState(p.reaction), [likes, setLikes] = useState(p.likes), [dislikes, setDislikes] = useState(p.dislikes), [reposted, setReposted] = useState(!!p.reposted), [reposts, setReposts] = useState(p.reposts), [saved, setSaved] = useState(!!p.saved);
+  useEffect(() => { setReaction(p.reaction); setLikes(p.likes); setDislikes(p.dislikes); setReposted(!!p.reposted); setReposts(p.reposts); setSaved(!!p.saved); }, [p.id, p.reaction, p.likes, p.dislikes, p.reposted, p.reposts, p.saved]);
+  const action = async (path: string, body: unknown, msg?: string) => {
+    if (!requireAuth() || busy) return;
+    setBusy(true);
+    const ok = await run(() => api(path, body), msg);
+    if (ok && path === "reactions") {
+      const value = (body as { value: number }).value, previous = reaction, next = previous === value ? 0 : value;
+      setLikes(current => current + (next === 1 ? 1 : 0) - (previous === 1 ? 1 : 0));
+      setDislikes(current => current + (next === -1 ? 1 : 0) - (previous === -1 ? 1 : 0));
+      setReaction(next);
+    }
+    if (ok && path === "reposts") { setReposted(current => !current); setReposts(current => current + (reposted ? -1 : 1)); }
+    if (ok && path === "bookmarks") setSaved(current => !current);
+    setBusy(false);
+  };
   return <article className={`post-card ${p.kind === "text" ? "text-post" : ""}`}>
     {p.community_name && <button className="post-community" onClick={() => navigate(`community/${p.community_id}`)}><UsersRound size={13} />Em {p.community_name}<ArrowUpRight size={12} /></button>}
     <div className="post-header"><Avatar person={p} onClick={() => navigate(`profile/${p.user_id}`)} /><div className="post-author"><button onClick={() => navigate(`profile/${p.user_id}`)}>{p.name}</button><span>@{p.handle}<i>·</i><time dateTime={new Date(p.created_at).toISOString()}>{ago(p.created_at)}</time></span></div><div className="post-menu"><button className="icon-button" aria-label="Opções da publicação" aria-expanded={menu} onClick={() => setMenu(!menu)}><MoreHorizontal size={22} /></button>{menu && <><button className="menu-dismiss" aria-label="Fechar opções" onClick={() => setMenu(false)} /><div className="dropdown">{data.me?.id === p.user_id ? <button onClick={() => { setMenu(false); setRemove(true); }}><Trash2 size={16} />Excluir publicação</button> : <button onClick={() => { setMenu(false); if (requireAuth()) setReport(true); }}><Flag size={16} />Denunciar publicação</button>}<button onClick={async () => { setMenu(false); try { await navigator.clipboard.writeText(`${location.origin}/#profile/${p.user_id}`); toast("Link do perfil copiado."); } catch { toast("Não foi possível copiar o link neste navegador."); } }}><ArrowUpRight size={16} />Copiar link do perfil</button></div></>}</div></div>
@@ -127,7 +156,7 @@ function PostCard({ post: p }: { post: Post }) {
     {p.kind === "photo" && p.media && <div className="post-photo"><img src={p.media} alt={p.title || p.body.slice(0, 200) || `Fotografia publicada por ${p.name}`} loading="lazy" /></div>}
     {p.kind === "video" && p.media && <video className="post-video" controls preload="metadata" playsInline src={p.media}>Seu navegador não suporta este vídeo.</video>}
     {!!p.tags && <div className="post-tags">{p.tags.split(",").filter(Boolean).map(tag => <button key={tag} onClick={() => navigate(`explore/${encodeURIComponent(tag)}`)}>#{tag}</button>)}</div>}
-    <div className="post-actions"><button aria-label={`Curtir${p.reaction === 1 ? ", selecionado" : ""}`} aria-pressed={p.reaction === 1} className={p.reaction === 1 ? "liked" : ""} disabled={busy} onClick={() => action("reactions", { postId: p.id, value: 1 })}><Heart size={19} fill={p.reaction === 1 ? "currentColor" : "none"} /><span>{fmt.format(p.likes)}</span></button><button aria-label="Não gostei" title="Não gostei" aria-pressed={p.reaction === -1} className={p.reaction === -1 ? "disliked" : ""} disabled={busy} onClick={() => action("reactions", { postId: p.id, value: -1 })}><ThumbsDown size={18} /><span>{fmt.format(p.dislikes)}</span></button><button aria-label="Abrir comentários" onClick={() => setComments(true)}><MessageCircle size={19} /><span>{fmt.format(p.comments)}</span></button><button aria-label={p.reposted ? "Desfazer repost" : "Repostar"} aria-pressed={!!p.reposted} className={p.reposted ? "selected" : ""} disabled={busy} onClick={() => action("reposts", { postId: p.id }, p.reposted ? "Repost desfeito." : "Publicação adicionada ao seu perfil e ao feed de quem te segue.")}><Repeat2 size={20} /><span>{fmt.format(p.reposts)}</span></button><button className={`save-action ${p.saved ? "selected" : ""}`} aria-label={p.saved ? "Remover dos guardados" : "Guardar publicação"} aria-pressed={!!p.saved} disabled={busy} onClick={() => action("bookmarks", { postId: p.id }, p.saved ? "Removido dos guardados." : "Guardado para outra hora.")}><Bookmark size={19} fill={p.saved ? "currentColor" : "none"} /></button></div>
+    <div className="post-actions"><button aria-label={`Curtir${reaction === 1 ? ", selecionado" : ""}`} aria-pressed={reaction === 1} className={reaction === 1 ? "liked" : ""} disabled={busy} onClick={() => action("reactions", { postId: p.id, value: 1 })}><Heart size={19} fill={reaction === 1 ? "currentColor" : "none"} /><span>{fmt.format(likes)}</span></button><button aria-label="Não gostei" title="Não gostei" aria-pressed={reaction === -1} className={reaction === -1 ? "disliked" : ""} disabled={busy} onClick={() => action("reactions", { postId: p.id, value: -1 })}><ThumbsDown size={18} /><span>{fmt.format(dislikes)}</span></button><button aria-label="Abrir comentários" onClick={() => setComments(true)}><MessageCircle size={19} /><span>{fmt.format(p.comments)}</span></button><button aria-label={reposted ? "Desfazer repost" : "Repostar"} aria-pressed={reposted} className={reposted ? "selected" : ""} disabled={busy} onClick={() => action("reposts", { postId: p.id }, reposted ? "Repost desfeito." : "Publicação adicionada ao seu perfil e ao feed de quem te segue.")}><Repeat2 size={20} /><span>{fmt.format(reposts)}</span></button><button className={`save-action ${saved ? "selected" : ""}`} aria-label={saved ? "Remover dos guardados" : "Guardar publicação"} aria-pressed={saved} disabled={busy} onClick={() => action("bookmarks", { postId: p.id }, saved ? "Removido dos guardados." : "Guardado para outra hora.")}><Bookmark size={19} fill={saved ? "currentColor" : "none"} /></button></div>
     {comments && <CommentsModal post={p} close={() => setComments(false)} />}
     {report && <Modal title="Denunciar publicação" close={() => setReport(false)}><SimpleTextForm label="O que aconteceu?" placeholder="Conte por que esta publicação precisa de revisão." button="Enviar denúncia" max={1000} submit={async body => { const ok = await run(() => api("reports", { postId: p.id, reason: body }), "Denúncia registrada para revisão."); if (ok) setReport(false); return ok; }} /></Modal>}
     {remove && <Modal title="Excluir esta publicação?" close={() => setRemove(false)}><div className="prose"><p>A publicação e seus comentários serão removidos permanentemente.</p><button className="primary danger" disabled={busy} onClick={async () => { setBusy(true); if (await run(() => api(`posts/${p.id}`, {}, "DELETE"), "Publicação excluída.")) setRemove(false); setBusy(false); }}>Excluir publicação</button></div></Modal>}
@@ -138,17 +167,22 @@ function SimpleTextForm({ label, placeholder, button, max, submit }: { label: st
   return <form className="form-stack" onSubmit={async e => { e.preventDefault(); if (!value.trim() || busy) return; setBusy(true); if (await submit(value)) setValue(""); setBusy(false); }}><label>{label}<textarea required maxLength={max} placeholder={placeholder} value={value} onChange={e => setValue(e.target.value)} rows={5} /></label><div className="form-bottom"><span>{value.length}/{max}</span><button className="primary" disabled={busy || !value.trim()}>{busy && <LoaderCircle className="spin" size={16} />}{button}</button></div></form>;
 }
 function CommentsModal({ post, close }: { post: Post; close: () => void }) {
-  const { requireAuth, run, data } = useApp();
+  const { revision, requireAuth, run, data } = useApp();
   const [comments, setComments] = useState<Comment[] | null>(null), [cursor, setCursor] = useState<number | null>(null), [loadingMore, setLoadingMore] = useState(false), [error, setError] = useState("");
   const load = useCallback(async (nextCursor?: number | null, replace = false) => {
     const suffix = nextCursor ? `?cursor=${nextCursor}` : "";
     const result = await api<{ comments: Comment[]; cursor: number | null }>(`comments/${post.id}${suffix}`);
-    setComments(current => replace || !current ? result.comments : [...result.comments, ...current]);
-    setCursor(result.cursor);
+    setComments(current => {
+      if (replace || !current) return result.comments;
+      const seen = new Set<string>();
+      return [...result.comments, ...current].filter(comment => { if (seen.has(comment.id)) return false; seen.add(comment.id); return true; });
+    });
+    if (replace || nextCursor !== null && nextCursor !== undefined) setCursor(result.cursor);
   }, [post.id]);
   useEffect(() => { let live = true; setComments(null); setCursor(null); setError(""); load(null, true).catch(e => { if (live) setError(e.message); }); return () => { live = false; }; }, [load]);
+  useEffect(() => { if (!revision) return; let live = true; load(null).catch(e => { if (live) setError(e.message); }); return () => { live = false; }; }, [revision, load]);
   const loadOlder = async () => { if (!cursor || loadingMore) return; setLoadingMore(true); try { await load(cursor); } catch (e) { setError((e as Error).message); } finally { setLoadingMore(false); } };
-  const submit = async (body: string) => { const ok = await run(() => api("comments", { postId: post.id, body }), "Comentário publicado."); if (ok) { try { await load(null, true); } catch { /* keep the newly submitted form usable if refresh is delayed */ } } return ok; };
+  const submit = async (body: string) => { const ok = await run(() => api("comments", { postId: post.id, body }), "Comentário publicado."); if (ok) { try { await load(null); } catch { /* keep the newly submitted form usable if refresh is delayed */ } } return ok; };
   return <Modal title="A conversa continua." close={close}><div className="comments-list"><p className="comment-context">{post.body.slice(0, 180)}</p>{error ? <ErrorBox message={error} /> : !comments ? <Loading /> : <>{!!cursor && <button className="secondary load-more-comments" disabled={loadingMore} onClick={loadOlder}>{loadingMore ? <LoaderCircle className="spin" size={17} /> : "Ver comentários anteriores"}</button>}{comments.length ? comments.map(c => <div className="comment" key={c.id}><Avatar person={c} size="small" onClick={() => { close(); navigate(`profile/${c.user_id}`); }} /><div><strong>{c.name} <time>{ago(c.created_at)}</time></strong><p>{c.body}</p></div></div>) : <p className="muted">A conversa está aberta. Seja a primeira pessoa a comentar.</p>}</>}</div>{data.me ? <SimpleTextForm label="Seu comentário" placeholder="Acrescente algo à conversa…" button="Comentar" max={2000} submit={submit} /> : <button className="primary modal-login" onClick={requireAuth}>Entrar para comentar</button>}</Modal>;
 }
 
@@ -178,9 +212,9 @@ function CommunityCard({ community: c }: { community: Community }) {
 }
 function JoinButton({ community: c }: { community: Community }) { const { requireAuth, run } = useApp(); const [busy, setBusy] = useState(false); return <button className={`join-button ${c.joined ? "joined" : ""}`} disabled={busy} onClick={async () => { if (!requireAuth()) return; setBusy(true); await run(() => api("memberships", { communityId: c.id }), c.joined ? "Você saiu da comunidade." : "Você faz parte dessa turma agora."); setBusy(false); }}>{c.joined ? <Check size={14} /> : <Plus size={14} />}{c.joined ? "Participando" : "Participar"}</button>; }
 function CommunityPage({ id }: { id: string }) {
-  const { data, compose } = useApp();
+  const { data, revision, compose } = useApp();
   const [community, setCommunity] = useState<Community | null>(() => data.communities.find(c => c.id === id) || null), [loading, setLoading] = useState(true), [error, setError] = useState("");
-  useEffect(() => { let live = true; setLoading(true); setError(""); api<{ community: Community }>(`communities/${encodeURIComponent(id)}`).then(result => { if (live) { setCommunity(result.community); setLoading(false); } }).catch(e => { if (live) { setCommunity(null); setError(e.message); setLoading(false); } }); return () => { live = false; }; }, [id]);
+  useEffect(() => { let live = true; setLoading(true); setError(""); api<{ community: Community }>(`communities/${encodeURIComponent(id)}`).then(result => { if (live) { setCommunity(result.community); setLoading(false); } }).catch(e => { if (live) { setCommunity(null); setError(e.message); setLoading(false); } }); return () => { live = false; }; }, [id, revision]);
   const c = community;
   if (loading && !c) return <Loading />;
   if (error || !c) return <ErrorBox message={error || "Comunidade não encontrada."} />;

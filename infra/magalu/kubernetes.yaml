@@ -43,6 +43,11 @@ spec:
           env:
             - name: PORT
               value: "8787"
+            - name: IDENTITY_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: entre-identity-gateway
+                  key: hmac-secret
           readinessProbe:
             httpGet:
               path: /
@@ -76,7 +81,9 @@ metadata:
   name: entre
   namespace: entre
 spec:
-  type: LoadBalancer
+  # Keep the worker private. An identity-aware gateway must terminate public
+  # traffic, strip spoofed oai-* headers, and add the signed identity headers.
+  type: ClusterIP
   selector:
     app: entre
   ports:

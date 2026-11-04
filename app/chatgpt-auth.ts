@@ -17,6 +17,7 @@ const PERCENT_ENCODED_UTF8 = "percent-encoded-utf-8";
 const SIGN_IN_PATH = "/signin-with-chatgpt";
 const SIGN_OUT_PATH = "/signout-with-chatgpt";
 const CALLBACK_PATH = "/callback";
+const IDENTITY_SIGNATURE_HEADER = "x-entre-identity-signature";
 
 export async function getChatGPTUser(): Promise<ChatGPTUser | null> {
   const requestHeaders = await headers();
@@ -37,6 +38,38 @@ export async function getChatGPTUser(): Promise<ChatGPTUser | null> {
     email,
     fullName,
   };
+}
+
+/**
+ * Magalu deployments must receive identity headers from a trusted gateway.
+ * The gateway signs the canonical JSON payload with the shared HMAC secret;
+ * local previews can explicitly opt into the unsigned mock identity.
+ */
+export async function verifyChatGPTUser(
+  request: Request,
+  user: ChatGPTUser | null,
+  secret: string | undefined,
+  allowUnsigned = false,
+): Promise<ChatGPTUser | null> {
+  if (!user) return null;
+  if (!secret) return allowUnsigned ? user : null;
+  const encodedSignature = request.headers.get(IDENTITY_SIGNATURE_HEADER);
+  if (!encodedSignature) return null;
+  try {
+    const key = await crypto.subtle.importKey(
+      "raw",
+      new TextEncoder().encode(secret),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["verify"],
+    );
+    const signature = decodeBase64(encodedSignature);
+    const payload = JSON.stringify({ userId: user.userId, email: user.email, fullName: user.fullName });
+    const valid = await crypto.subtle.verify("HMAC", key, signature as unknown as BufferSource, new TextEncoder().encode(payload));
+    return valid ? user : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function requireChatGPTUser(
@@ -87,4 +120,10 @@ function safeDecodeURIComponent(value: string): string | null {
   } catch {
     return null;
   }
+}
+
+function decodeBase64(value: string): Uint8Array {
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  const binary = atob(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "="));
+  return Uint8Array.from(binary, character => character.charCodeAt(0));
 }

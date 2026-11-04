@@ -6,6 +6,23 @@ const fail = (status: number, message: string): never => { throw new ApiError(st
 const json = (data: unknown, status = 200) => Response.json(data, { status, headers: { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" } });
 const id = () => crypto.randomUUID();
 const now = () => Date.now();
+type FeedCursor = { relevance: number; rowid: number };
+function encodeFeedCursor(cursor: FeedCursor) {
+  return btoa(JSON.stringify(cursor)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+function decodeFeedCursor(value: string): FeedCursor {
+  try {
+    const normalized = value.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(value.length / 4) * 4, "=");
+    const parsed = JSON.parse(atob(normalized)) as Partial<FeedCursor>;
+    const relevance = parsed.relevance, rowid = parsed.rowid;
+    if (typeof rowid !== "number" || !Number.isSafeInteger(rowid) || rowid < 0 || typeof relevance !== "number" || !Number.isFinite(relevance)) fail(400, "Cursor inválido.");
+    return { relevance: relevance as number, rowid: rowid as number };
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    fail(400, "Cursor inválido.");
+  }
+  return { relevance: 0, rowid: 0 };
+}
 function text(value: unknown, max: number, required = false) {
   if (typeof value !== "string") { if (required) fail(400, "Preencha os campos obrigatórios."); return ""; }
   const v = value.trim();
@@ -106,7 +123,12 @@ async function dispatch(request: Request, { db, bucket, user, localPreview }: Ap
     if (q.get("communityId")) { where += " AND p.community_id=?"; args.push(q.get("communityId")); }
     if (q.get("saved") === "1") { requireUser(); where += " AND EXISTS(SELECT 1 FROM bookmarks WHERE post_id=p.id AND user_id=?)"; args.push(me); }
     if (q.get("q")) { where += " AND (p.body LIKE ? ESCAPE '\\' OR p.title LIKE ? ESCAPE '\\' OR p.tags LIKE ? ESCAPE '\\')"; const term = `%${text(q.get("q"), 100).replace(/[\\%_]/g, "\\$&")}%`; args.push(term, term, term); }
-    if (q.get("cursor")) { const cursor = Number(q.get("cursor")); if (!Number.isSafeInteger(cursor) || cursor < 0) fail(400, "Cursor inválido."); where += " AND p.rowid<?"; args.push(cursor); }
+    const rawCursor = q.get("cursor");
+    if (rawCursor) {
+      const cursor = decodeFeedCursor(rawCursor);
+      where += ` AND ((${relevance}) < ? OR ((${relevance}) = ? AND p.rowid<?))`;
+      args.push(...relevanceArgs, cursor.relevance, cursor.relevance, cursor.rowid);
+    }
     const rows = await all(`SELECT p.*, p.rowid AS cursor,u.name,u.handle,u.avatar,c.name AS community_name,
       ${relevance} AS relevance,
       (SELECT COUNT(*) FROM reactions WHERE post_id=p.id AND value=1) AS likes,
@@ -119,7 +141,7 @@ async function dispatch(request: Request, { db, bucket, user, localPreview }: Ap
       FROM posts p JOIN users u ON u.id=p.user_id LEFT JOIN communities c ON c.id=p.community_id WHERE ${where}
       ORDER BY relevance DESC, p.rowid DESC LIMIT 21`, ...args);
     const hasMore = rows.length > 20;
-    return json({ posts: rows.slice(0, 20), cursor: hasMore ? rows[19].cursor : null });
+    return json({ posts: rows.slice(0, 20), cursor: hasMore ? encodeFeedCursor({ relevance: Number(rows[19].relevance || 0), rowid: Number(rows[19].cursor) }) : null });
   }
   if (path.startsWith("users/") && method === "GET") {
     const target = decodeURIComponent(path.slice(6)); await existsUser(target);
