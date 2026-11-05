@@ -115,7 +115,7 @@ CREATE TABLE IF NOT EXISTS `reports` (
 	FOREIGN KEY (`post_id`) REFERENCES `posts`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
-CREATE UNIQUE INDEX `reports_once_idx` ON `reports` (`user_id`,`post_id`);--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS `reports_once_idx` ON `reports` (`user_id`,`post_id`);--> statement-breakpoint
 CREATE TABLE IF NOT EXISTS `reposts` (
 	`user_id` text NOT NULL,
 	`post_id` text NOT NULL,
@@ -149,4 +149,4 @@ CREATE TABLE IF NOT EXISTS `users` (
 	`created_at` integer NOT NULL
 );
 --> statement-breakpoint
-CREATE UNIQUE INDEX `users_handle_unique` ON `users` (`handle`);
+CREATE UNIQUE INDEX IF NOT EXISTS `users_handle_unique` ON `users` (`handle`);
