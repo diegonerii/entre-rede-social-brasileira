@@ -9,9 +9,9 @@ async function handler(request: Request) {
   const identityFlag = (env as unknown as { IDENTITY_REQUIRE_SIGNATURE?: string }).IDENTITY_REQUIRE_SIGNATURE || process.env.IDENTITY_REQUIRE_SIGNATURE;
   // Sites keeps its verified oai-* identity path. Only an explicitly configured
   // Magalu gateway opts into the additional HMAC check.
-  const signatureRequired = !localPreview && identityFlag === "true" && Boolean(identitySecret);
+  const signatureRequired = identityFlag === "true" && Boolean(identitySecret);
   const rawIdentity = await getChatGPTUser();
-  const identity = signatureRequired ? await verifyChatGPTUser(request, rawIdentity, identitySecret, localPreview) : rawIdentity;
+  const identity = signatureRequired ? await verifyChatGPTUser(request, rawIdentity, identitySecret, false) : rawIdentity;
   return handleApi(request, {
     db: env.DB, bucket: env.BUCKET,
     user: identity ? { id: identity.userId, name: identity.fullName || identity.displayName.split("@")[0] } : null,

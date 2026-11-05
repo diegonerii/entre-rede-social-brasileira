@@ -111,11 +111,15 @@ function Feed({ filter = "", empty = "Ainda não há publicações por aqui." }:
       let page = await api<FeedResponse>(feedUrl());
       const refreshed: Post[] = [];
       let reachedBoundary = !boundaryId;
-      for (let attempt = 0; attempt < 100; attempt += 1) {
+      if (boundaryId) {
+        for (let attempt = 0; attempt < 100; attempt += 1) {
+          refreshed.push(...page.posts);
+          if (page.posts.some(post => post.id === boundaryId)) { reachedBoundary = true; break; }
+          if (!page.cursor) { reachedBoundary = true; break; }
+          page = await api<FeedResponse>(feedUrl(page.cursor));
+        }
+      } else {
         refreshed.push(...page.posts);
-        if (boundaryId && page.posts.some(post => post.id === boundaryId)) { reachedBoundary = true; break; }
-        if (!page.cursor) { reachedBoundary = true; break; }
-        page = await api<FeedResponse>(feedUrl(page.cursor));
       }
       if (!live || generation !== feedGeneration.current) return;
       const boundaryIndex = boundaryId ? refreshed.findIndex(post => post.id === boundaryId) : -1;
