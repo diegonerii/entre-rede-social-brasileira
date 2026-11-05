@@ -108,6 +108,7 @@ function Feed({ filter = "", empty = "Ainda não há publicações por aqui." }:
     const generation = feedGeneration.current;
     let live = true;
     const boundaryId = posts.at(-1)?.id;
+    const snapshotIds = new Set(posts.map(post => post.id));
     (async () => {
       let page = await api<FeedResponse>(feedUrl());
       const refreshed: Post[] = [];
@@ -130,7 +131,11 @@ function Feed({ filter = "", empty = "Ainda não há publicações por aqui." }:
         const fresh = new Map(ordered.map(post => [post.id, post]));
         const orderedIds = new Set(ordered.map(post => post.id));
         const merged = ordered.map(post => fresh.get(post.id)!);
-        const tail = reachedBoundary ? [] : current.filter(post => !orderedIds.has(post.id));
+        // Keep pages the user loaded while this refresh was in flight, while
+        // still removing stale cards that were present in the original view.
+        const tail = reachedBoundary
+          ? current.filter(post => !snapshotIds.has(post.id) && !orderedIds.has(post.id))
+          : current.filter(post => !orderedIds.has(post.id));
         return [...merged, ...tail];
       });
       const boundary = boundaryIndex >= 0 ? refreshed[boundaryIndex] as FeedPost : null;
