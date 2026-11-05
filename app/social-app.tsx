@@ -197,9 +197,12 @@ function CommentsModal({ post, close }: { post: Post; close: () => void }) {
     const fetchPage = (pageCursor?: number | null) => api<{ comments: CommentPage[]; cursor: number | null }>(`comments/${post.id}${pageCursor === null || pageCursor === undefined ? "" : `?cursor=${pageCursor}`}`);
     let result = await fetchPage(nextCursor);
     const pages = [result];
-    const oldestLoaded = commentsRef.current[0]?.id;
+    const newestLoaded = commentsRef.current.at(-1)?.id;
     if (!replace && nextCursor == null) {
-      for (let attempt = 0; oldestLoaded && result.cursor !== null && !result.comments.some(comment => comment.id === oldestLoaded) && attempt < 100; attempt += 1) {
+      // Polling should only fetch forward from the newest loaded comment. If
+      // more than one page arrived, walk back until that boundary is found;
+      // older history remains behind the explicit "load older" action.
+      for (let attempt = 0; newestLoaded && result.cursor !== null && !result.comments.some(comment => comment.id === newestLoaded) && attempt < 100; attempt += 1) {
         result = await fetchPage(result.cursor);
         pages.push(result);
       }
