@@ -176,19 +176,32 @@ function SimpleTextForm({ label, placeholder, button, max, submit }: { label: st
 }
 function CommentsModal({ post, close }: { post: Post; close: () => void }) {
   const { requireAuth, run, data } = useApp();
-  const [comments, setComments] = useState<Comment[] | null>(null), [cursor, setCursor] = useState<number | null>(null), [loadingMore, setLoadingMore] = useState(false), [error, setError] = useState("");
+  type CommentPage = Comment & { cursor?: number };
+  const commentsRef = useRef<CommentPage[]>([]);
+  const [comments, setComments] = useState<CommentPage[] | null>(null), [cursor, setCursor] = useState<number | null>(null), [loadingMore, setLoadingMore] = useState(false), [error, setError] = useState("");
   const load = useCallback(async (nextCursor?: number | null, replace = false) => {
-    const suffix = nextCursor ? `?cursor=${nextCursor}` : "";
-    const result = await api<{ comments: Comment[]; cursor: number | null }>(`comments/${post.id}${suffix}`);
+    const fetchPage = (pageCursor?: number | null) => api<{ comments: CommentPage[]; cursor: number | null }>(`comments/${post.id}${pageCursor === null || pageCursor === undefined ? "" : `?cursor=${pageCursor}`}`);
+    let result = await fetchPage(nextCursor);
+    const pages = [result];
+    const oldestLoaded = commentsRef.current[0]?.id;
+    if (!replace && nextCursor == null) {
+      for (let attempt = 0; oldestLoaded && result.cursor !== null && !result.comments.some(comment => comment.id === oldestLoaded) && attempt < 100; attempt += 1) {
+        result = await fetchPage(result.cursor);
+        pages.push(result);
+      }
+    }
+    const incoming = pages.flatMap(page => page.comments);
     setComments(current => {
-      if (replace || !current) return result.comments;
-      const merged = new Map(current.map(comment => [comment.id, comment]));
-      result.comments.forEach(comment => merged.set(comment.id, comment));
-      return [...merged.values()].sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id));
+      const base = replace || !current ? [] : current;
+      const merged = new Map(base.map(comment => [comment.id, comment]));
+      incoming.forEach(comment => merged.set(comment.id, comment));
+      const sorted = [...merged.values()].sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id));
+      commentsRef.current = sorted;
+      return sorted;
     });
-    if (replace || nextCursor !== null && nextCursor !== undefined) setCursor(result.cursor);
+    if (replace || nextCursor !== undefined) setCursor(pages.at(-1)?.cursor ?? null);
   }, [post.id]);
-  useEffect(() => { let live = true; setComments(null); setCursor(null); setError(""); load(null, true).catch(e => { if (live) setError(e.message); }); return () => { live = false; }; }, [load]);
+  useEffect(() => { let live = true; commentsRef.current = []; setComments(null); setCursor(null); setError(""); load(null, true).catch(e => { if (live) setError(e.message); }); return () => { live = false; }; }, [load]);
   useEffect(() => { const timer = setInterval(() => { if (!document.hidden) load(null).catch(e => setError(e.message)); }, 10000); return () => clearInterval(timer); }, [load]);
   const loadOlder = async () => { if (!cursor || loadingMore) return; setLoadingMore(true); try { await load(cursor); } catch (e) { setError((e as Error).message); } finally { setLoadingMore(false); } };
   const submit = async (body: string) => { const ok = await run(() => api("comments", { postId: post.id, body }), "Comentário publicado."); if (ok) { try { await load(null); } catch { /* keep the newly submitted form usable if refresh is delayed */ } } return ok; };
@@ -219,7 +232,7 @@ function Communities() {
 function CommunityCard({ community: c }: { community: Community }) {
   return <article className="community-card"><button className="community-cover" style={{ backgroundColor: c.color, backgroundImage: c.cover ? `linear-gradient(0deg,rgba(0,0,0,.12),transparent),url("${c.cover}")` : undefined }} onClick={() => navigate(`community/${c.id}`)} aria-label={`Conhecer ${c.name}`}><span>{c.category}</span>{!c.cover && <span className="community-monogram">{c.name.slice(0, 1)}</span>}</button><div className="community-card-content"><button onClick={() => navigate(`community/${c.id}`)}><h2>{c.name}</h2></button><p>{c.description}</p><div className="community-card-bottom"><span><UsersRound size={14} /> {fmt.format(c.members)} pessoas</span><JoinButton community={c} /></div></div></article>;
 }
-function JoinButton({ community: c }: { community: Community }) { const { requireAuth, run } = useApp(); const [busy, setBusy] = useState(false); return <button className={`join-button ${c.joined ? "joined" : ""}`} disabled={busy} onClick={async () => { if (!requireAuth()) return; setBusy(true); await run(() => api("memberships", { communityId: c.id }), c.joined ? "Você saiu da comunidade." : "Você faz parte dessa turma agora."); setBusy(false); }}>{c.joined ? <Check size={14} /> : <Plus size={14} />}{c.joined ? "Participando" : "Participar"}</button>; }
+function JoinButton({ community: c, onChanged }: { community: Community; onChanged?: (joined: number) => void }) { const { requireAuth, run } = useApp(); const [busy, setBusy] = useState(false); return <button className={`join-button ${c.joined ? "joined" : ""}`} disabled={busy} onClick={async () => { if (!requireAuth()) return; setBusy(true); const joined = c.joined ? 0 : 1; const ok = await run(() => api("memberships", { communityId: c.id }), joined ? "Você faz parte dessa turma agora." : "Você saiu da comunidade."); if (ok) onChanged?.(joined); setBusy(false); }}>{c.joined ? <Check size={14} /> : <Plus size={14} />}{c.joined ? "Participando" : "Participar"}</button>; }
 function CommunityPage({ id }: { id: string }) {
   const { data, revision, compose } = useApp();
   const [community, setCommunity] = useState<Community | null>(() => data.communities.find(c => c.id === id) || null), [loading, setLoading] = useState(true), [error, setError] = useState("");
@@ -228,7 +241,7 @@ function CommunityPage({ id }: { id: string }) {
   const c = community;
   if (loading && !c) return <Loading />;
   if (error || !c) return <ErrorBox message={error || "Comunidade não encontrada."} />;
-  return <><button className="back-button" onClick={() => navigate("communities")}><ArrowLeft size={17} />Comunidades</button><div className="community-detail-cover" style={{ backgroundColor: c.color, backgroundImage: c.cover ? `linear-gradient(0deg,rgba(0,0,0,.2),transparent),url("${c.cover}")` : undefined }}><span>{c.category}</span>{!c.cover && <span className="community-monogram">{c.name[0]}</span>}</div><div className="community-detail-head"><p className="eyebrow">PONTO DE ENCONTRO</p><h1>{c.name}</h1><p>{c.description}</p><div><span><UsersRound size={17} />{fmt.format(c.members)} pessoas</span><JoinButton community={c} /></div></div><div className="section-bar"><h2>Conversas da comunidade</h2><button className="text-button" disabled={!c.joined} onClick={() => compose("text", c.id)}><Plus size={16} />Puxar conversa</button></div>{!c.joined && <p className="join-notice">Entre na comunidade para publicar e começar uma conversa.</p>}<Feed filter={`communityId=${encodeURIComponent(id)}`} empty="Quem vai puxar a primeira conversa?" /></>;
+  return <><button className="back-button" onClick={() => navigate("communities")}><ArrowLeft size={17} />Comunidades</button><div className="community-detail-cover" style={{ backgroundColor: c.color, backgroundImage: c.cover ? `linear-gradient(0deg,rgba(0,0,0,.2),transparent),url("${c.cover}")` : undefined }}><span>{c.category}</span>{!c.cover && <span className="community-monogram">{c.name[0]}</span>}</div><div className="community-detail-head"><p className="eyebrow">PONTO DE ENCONTRO</p><h1>{c.name}</h1><p>{c.description}</p><div><span><UsersRound size={17} />{fmt.format(c.members)} pessoas</span><JoinButton community={c} onChanged={joined => setCommunity(current => current ? { ...current, joined, members: Math.max(0, current.members + (joined ? 1 : -1)) } : current)} /></div></div><div className="section-bar"><h2>Conversas da comunidade</h2><button className="text-button" disabled={!c.joined} onClick={() => compose("text", c.id)}><Plus size={16} />Puxar conversa</button></div>{!c.joined && <p className="join-notice">Entre na comunidade para publicar e começar uma conversa.</p>}<Feed filter={`communityId=${encodeURIComponent(id)}`} empty="Quem vai puxar a primeira conversa?" /></>;
 }
 function CreateCommunity({ close }: { close: () => void }) { const { run } = useApp(); const [busy, setBusy] = useState(false); return <Modal title="Uma nova turma." close={close}><form className="form-stack" onSubmit={async e => { e.preventDefault(); if (busy) return; const f = new FormData(e.currentTarget); setBusy(true); let result: any; const ok = await run(async () => { result = await api("communities", Object.fromEntries(f)); }, "Comunidade criada. A primeira conversa é sua."); setBusy(false); if (ok) { close(); navigate(`community/${result.id}`); } }}><label>Nome da comunidade<input name="name" placeholder="O que vocês têm em comum?" required maxLength={70} /></label><label>Sobre a comunidade<textarea name="description" placeholder="Apresente o seu ponto de encontro." required maxLength={500} rows={4} /></label><label>Categoria<select name="category">{["Arte", "Fotografia", "Música", "Cinema", "Literatura", "Cotidiano", "Tecnologia", "Outros"].map(c => <option key={c}>{c}</option>)}</select></label><p className="fine-print">Comunidades e suas publicações são públicas. Quem cria também passa a participar.</p><button className="primary" disabled={busy}>{busy && <LoaderCircle size={16} className="spin" />}Criar comunidade <ArrowRight size={17} /></button></form></Modal>; }
 
