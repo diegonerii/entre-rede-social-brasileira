@@ -205,6 +205,7 @@ function CommentsModal({ post, close }: { post: Post; close: () => void }) {
       }
     }
     const incoming = pages.flatMap(page => page.comments);
+    setError("");
     setComments(current => {
       const base = replace || !current ? [] : current;
       const merged = new Map(base.map(comment => [comment.id, comment]));
