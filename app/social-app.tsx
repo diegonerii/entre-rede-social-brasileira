@@ -97,11 +97,14 @@ function HomeFeed() {
 function Feed({ filter = "", empty = "Ainda não há publicações por aqui." }: { filter?: string; empty?: string }) {
   const { revision } = useApp();
   type FeedResponse = { posts: Post[]; cursor: string | null };
+  type FeedPost = Post & { cursor?: number; relevance?: number };
+  const feedGeneration = useRef(0);
   const feedUrl = (nextCursor?: string | null) => `feed?${filter}${nextCursor ? `&cursor=${encodeURIComponent(nextCursor)}` : ""}`;
   const [posts, setPosts] = useState<Post[] | null>(null), [cursor, setCursor] = useState<string | null>(null), [error, setError] = useState(""), [more, setMore] = useState(false), [retry, setRetry] = useState(0);
-  useEffect(() => { let live = true; setPosts(null); setCursor(null); setError(""); api<FeedResponse>(feedUrl()).then(d => { if (live) { setPosts(d.posts); setCursor(d.cursor); } }).catch(e => { if (live) setError(e.message); }); return () => { live = false; }; }, [filter, retry]);
+  useEffect(() => { const generation = ++feedGeneration.current; let live = true; setPosts(null); setCursor(null); setError(""); api<FeedResponse>(feedUrl()).then(d => { if (live && generation === feedGeneration.current) { setPosts(d.posts); setCursor(d.cursor); } }).catch(e => { if (live && generation === feedGeneration.current) setError(e.message); }); return () => { live = false; }; }, [filter, retry]);
   useEffect(() => {
     if (!revision || !posts) return;
+    const generation = feedGeneration.current;
     let live = true;
     const boundaryId = posts.at(-1)?.id;
     (async () => {
@@ -114,19 +117,24 @@ function Feed({ filter = "", empty = "Ainda não há publicações por aqui." }:
         if (!page.cursor) { reachedBoundary = true; break; }
         page = await api<FeedResponse>(feedUrl(page.cursor));
       }
-      if (!live) return;
+      if (!live || generation !== feedGeneration.current) return;
+      const boundaryIndex = boundaryId ? refreshed.findIndex(post => post.id === boundaryId) : -1;
+      const ordered = boundaryIndex >= 0 ? refreshed.slice(0, boundaryIndex + 1) : refreshed;
       setPosts(current => {
-        if (!current) return refreshed;
-        const fresh = new Map(refreshed.map(post => [post.id, post]));
-        const refreshedIds = new Set(refreshed.map(post => post.id));
-        const retained = current.filter(post => !reachedBoundary || refreshedIds.has(post.id)).map(post => fresh.get(post.id) || post);
-        const existing = new Set(retained.map(post => post.id));
-        return [...refreshed.filter(post => !existing.has(post.id)), ...retained];
+        if (!current) return ordered;
+        const fresh = new Map(ordered.map(post => [post.id, post]));
+        const orderedIds = new Set(ordered.map(post => post.id));
+        const merged = ordered.map(post => fresh.get(post.id)!);
+        const tail = reachedBoundary ? [] : current.filter(post => !orderedIds.has(post.id));
+        return [...merged, ...tail];
       });
-      setCursor(page.cursor);
+      const boundary = boundaryIndex >= 0 ? refreshed[boundaryIndex] as FeedPost : null;
+      if (boundary?.relevance !== undefined && boundary.cursor !== undefined) {
+        setCursor(btoa(JSON.stringify({ relevance: boundary.relevance, rowid: boundary.cursor })).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""));
+      } else setCursor(page.cursor);
     })().catch(() => { /* The existing page remains usable if a background refresh fails. */ });
     return () => { live = false; };
-  }, [revision]);
+  }, [revision, filter]);
   const load = async () => { if (!cursor) return; setMore(true); try { const d = await api<FeedResponse>(feedUrl(cursor)); setPosts(p => [...(p || []), ...d.posts.filter(n => !p?.some(o => o.id === n.id))]); setCursor(d.cursor); } catch (e) { setError((e as Error).message); } finally { setMore(false); } };
   return <div className="feed">{error && <ErrorBox message={error} retry={() => setRetry(v => v + 1)} />}{!posts && !error ? <Loading /> : posts?.length ? <>{posts.map(p => <PostCard post={p} key={p.id} />)}{cursor && <button className="load-more secondary" disabled={more} onClick={load}>{more ? <LoaderCircle className="spin" size={18} /> : "Ver mais publicações"}</button>}<p className="feed-end">Você chegou até aqui. Respire um pouco. <Leaf size={14} /></p></> : !error && <Empty title={empty}><p>Explore pessoas e comunidades para descobrir novas conversas.</p><button className="text-button" onClick={() => navigate("explore")}>Explorar a entre <ArrowUpRight size={16} /></button></Empty>}</div>;
 }
@@ -174,8 +182,9 @@ function CommentsModal({ post, close }: { post: Post; close: () => void }) {
     const result = await api<{ comments: Comment[]; cursor: number | null }>(`comments/${post.id}${suffix}`);
     setComments(current => {
       if (replace || !current) return result.comments;
-      const seen = new Set<string>();
-      return [...result.comments, ...current].filter(comment => { if (seen.has(comment.id)) return false; seen.add(comment.id); return true; });
+      const merged = new Map(current.map(comment => [comment.id, comment]));
+      result.comments.forEach(comment => merged.set(comment.id, comment));
+      return [...merged.values()].sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id));
     });
     if (replace || nextCursor !== null && nextCursor !== undefined) setCursor(result.cursor);
   }, [post.id]);

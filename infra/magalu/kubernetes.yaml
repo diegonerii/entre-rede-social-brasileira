@@ -48,6 +48,8 @@ spec:
                 secretKeyRef:
                   name: entre-identity-gateway
                   key: hmac-secret
+            - name: IDENTITY_REQUIRE_SIGNATURE
+              value: "true"
           readinessProbe:
             httpGet:
               path: /

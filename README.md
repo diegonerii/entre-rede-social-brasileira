@@ -61,7 +61,7 @@ kubectl apply -f infra/magalu/kubernetes.yaml
 kubectl -n entre get service entre
 ```
 
-O serviço permanece `ClusterIP` de propósito: ele não deve ser exposto diretamente à internet. Coloque um gateway de identidade na frente, remova qualquer `oai-*` recebido do cliente e injete os cabeçalhos verificados junto de `x-entre-identity-signature`. A assinatura é HMAC-SHA256, em Base64URL, sobre `{"userId":"...","email":"...","fullName":"..."}`. Crie o segredo fora do repositório antes de aplicar o Deployment:
+O serviço permanece `ClusterIP` de propósito: ele não deve ser exposto diretamente à internet. Coloque um gateway de identidade na frente, remova qualquer `oai-*` recebido do cliente e injete os cabeçalhos verificados junto de `x-entre-identity-signature`. A assinatura é HMAC-SHA256, em Base64URL, sobre `{"userId":"...","email":"...","fullName":"..."}`. O `IDENTITY_REQUIRE_SIGNATURE=true` vale somente para esse manifesto Magalu; o deploy Sites continua usando a identidade verificada nativa da plataforma. Crie o segredo fora do repositório antes de aplicar o Deployment:
 
 ```powershell
 kubectl -n entre create secret generic entre-identity-gateway --from-literal=hmac-secret='<valor-fornecido-ao-gateway>'

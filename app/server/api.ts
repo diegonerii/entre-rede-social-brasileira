@@ -127,7 +127,7 @@ async function dispatch(request: Request, { db, bucket, user, localPreview }: Ap
     if (rawCursor) {
       const cursor = decodeFeedCursor(rawCursor);
       where += ` AND ((${relevance}) < ? OR ((${relevance}) = ? AND p.rowid<?))`;
-      args.push(...relevanceArgs, cursor.relevance, cursor.relevance, cursor.rowid);
+      args.push(...relevanceArgs, cursor.relevance, ...relevanceArgs, cursor.relevance, cursor.rowid);
     }
     const rows = await all(`SELECT p.*, p.rowid AS cursor,u.name,u.handle,u.avatar,c.name AS community_name,
       ${relevance} AS relevance,
