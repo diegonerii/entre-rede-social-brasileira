@@ -13,9 +13,12 @@ async function api<T = any>(path: string, body?: unknown, method = "POST"): Prom
 const fmt = new Intl.NumberFormat("pt-BR", { notation: "compact", maximumFractionDigits: 1 });
 function ago(time: number) { const minutes = Math.max(1, Math.floor((Date.now() - time) / 60000)); return minutes < 60 ? `${minutes} min` : minutes < 1440 ? `${Math.floor(minutes / 60)} h` : new Date(time).toLocaleDateString("pt-BR", { day: "numeric", month: "short" }); }
 function navigate(path: string) { window.location.hash = path; }
+function decodeRoutePart(value: string) {
+  try { return decodeURIComponent(value); } catch { return value; }
+}
 function useRoute() {
   const [route, setRoute] = useState("feed");
-  useEffect(() => { const update = () => setRoute(decodeURI(location.hash.slice(1)) || "feed"); update(); window.addEventListener("hashchange", update); return () => window.removeEventListener("hashchange", update); }, []);
+  useEffect(() => { const update = () => setRoute(location.hash.slice(1) || "feed"); update(); window.addEventListener("hashchange", update); return () => window.removeEventListener("hashchange", update); }, []);
   return route;
 }
 type AppContext = { data: Bootstrap; revision: number; refresh: () => void; toast: (s: string) => void; requireAuth: () => boolean; run: (action: () => Promise<unknown>, success?: string) => Promise<boolean>; compose: (kind?: string, communityId?: string) => void };
@@ -73,7 +76,7 @@ export default function SocialApp() {
       <main id="main" className={`main-layout ${current === "messages" ? "messages-layout" : ""}`} tabIndex={-1}>
         {!data ? <div className="main-column">{error ? <ErrorBox message={error} retry={refresh} /> : <><div className="skeleton-title" /><div className="skeleton-card" /><Loading /></>}</div> : <Context.Provider value={{ data, revision, refresh, toast: setToast, requireAuth, run, compose }}><div className="main-column">
           {error && <ErrorBox message={error} retry={refresh} />}
-          {current === "feed" ? <HomeFeed /> : current === "explore" ? <Explore query={decodeURIComponent(route.slice(8) || "")} /> : current === "communities" ? <Communities /> : current === "community" ? <CommunityPage id={route.slice(10)} /> : current === "profile" ? <Profile id={route.slice(8) || data.me?.id || ""} /> : current === "messages" ? <Messages peerId={route.slice(9)} /> : current === "notifications" ? <Notifications /> : current === "saved" ? <><PageHeading eyebrow="SUA COLEÇÃO" title="Para voltar depois." description="As publicações que você guardou pelo caminho." /><Feed filter="saved=1" empty="Sua coleção começa por uma publicação." /></> : <Empty title="Esse caminho ainda não existe."><button className="text-button" onClick={() => navigate("feed")}>Voltar ao feed</button></Empty>}
+          {current === "feed" ? <HomeFeed /> : current === "explore" ? <Explore query={decodeRoutePart(route.slice(8) || "")} /> : current === "communities" ? <Communities /> : current === "community" ? <CommunityPage id={decodeRoutePart(route.slice(10))} /> : current === "profile" ? <Profile id={decodeRoutePart(route.slice(8) || data.me?.id || "")} /> : current === "messages" ? <Messages peerId={decodeRoutePart(route.slice(9))} /> : current === "notifications" ? <Notifications /> : current === "saved" ? <><PageHeading eyebrow="SUA COLEÇÃO" title="Para voltar depois." description="As publicações que você guardou pelo caminho." /><Feed filter="saved=1" empty="Sua coleção começa por uma publicação." /></> : <Empty title="Esse caminho ainda não existe."><button className="text-button" onClick={() => navigate("feed")}>Voltar ao feed</button></Empty>}
         </div>{current !== "messages" && <RightRail />}{composer && <Composer {...composer} close={() => setComposer(null)} />}</Context.Provider>}
       </main>
       <footer className="mobile-bottom" aria-label="Navegação mobile">{menu.slice(0, 4).map(({ key, label, icon: Icon, count }) => <button key={key} onClick={() => go(key)} className={current === key ? "active" : ""} aria-label={label} aria-current={current === key ? "page" : undefined}><Icon size={23} strokeWidth={current === key ? 2.2 : 1.7} /><span>{key === "feed" ? "Início" : label}</span>{!!count && <b className="mobile-count">{count}</b>}</button>)}<button aria-label="Mais opções" onClick={() => setMore(!more)} className={more ? "active" : ""}><Menu size={23} /><span>Mais</span></button></footer>
@@ -89,20 +92,85 @@ export default function SocialApp() {
 function PageHeading({ eyebrow, title, description, action }: { eyebrow: string; title: string; description?: string; action?: ReactNode }) { return <div className="page-heading"><div><p className="eyebrow">{eyebrow}</p><h1>{title}</h1>{description && <p className="heading-description">{description}</p>}</div>{action}</div>; }
 function HomeFeed() {
   const { data, compose } = useApp(), [tab, setTab] = useState("for-you");
-  return <><PageHeading eyebrow="CHEGUE MAIS, FIQUE UM POUCO" title="Da sua gente." description="Novas perspectivas. Afinidades de sempre." action={<span className="heading-decoration" aria-hidden="true">✳</span>} /><section className="quick-composer" aria-label="Criar uma publicação"><div className="composer-prompt"><Avatar person={data.me || { name: "Você" }} /><button onClick={() => compose()}>O que ficou na sua cabeça?</button><button className="icon-button" aria-label="Criar publicação" onClick={() => compose()}><Plus size={19} /></button></div><div className="composer-options"><button onClick={() => compose("text")}><Type size={19} />Texto</button><button onClick={() => compose("photo")}><Image size={18} />Foto</button><button onClick={() => compose("video")}><Video size={18} />Vídeo</button><span>Do seu jeito.</span></div></section><div className="feed-tabs" role="tablist" aria-label="Filtrar o feed">{[["for-you", "Para você"], ["following", "Seguindo"], ["communities", "Comunidades"]].map(([key, label]) => <button role="tab" aria-selected={tab === key} key={key} className={tab === key ? "active" : ""} onClick={() => setTab(key)}>{label}</button>)}<span className="feed-chronology"><Settings2 size={14} /> Recentes</span></div><Feed filter={`tab=${tab}`} empty={tab === "following" ? "Seu feed começa com uma conexão." : tab === "communities" ? "Encontre sua turma." : "A primeira publicação pode ser sua."} /></>;
+  return <><PageHeading eyebrow="CHEGUE MAIS, FIQUE UM POUCO" title="Da sua gente." description="Amigos, afinidades e recomendações escolhidas para você." action={<span className="heading-decoration" aria-hidden="true">✳</span>} /><section className="quick-composer" aria-label="Criar uma publicação"><div className="composer-prompt"><Avatar person={data.me || { name: "Você" }} /><button onClick={() => compose()}>O que ficou na sua cabeça?</button><button className="icon-button" aria-label="Criar publicação" onClick={() => compose()}><Plus size={19} /></button></div><div className="composer-options"><button onClick={() => compose("text")}><Type size={19} />Texto</button><button onClick={() => compose("photo")}><Image size={18} />Foto</button><button onClick={() => compose("video")}><Video size={18} />Vídeo</button><span>Do seu jeito.</span></div></section><div className="feed-tabs" role="tablist" aria-label="Filtrar o feed">{[["for-you", "Para você"], ["following", "Seguindo"], ["communities", "Comunidades"]].map(([key, label]) => <button role="tab" aria-selected={tab === key} key={key} className={tab === key ? "active" : ""} onClick={() => setTab(key)}>{label}</button>)}<span className="feed-chronology"><Settings2 size={14} /> Afinidades primeiro</span></div><Feed filter={`tab=${tab}`} empty={tab === "following" ? "Seu feed começa com uma conexão." : tab === "communities" ? "Encontre sua turma." : "A primeira publicação pode ser sua."} /></>;
 }
 function Feed({ filter = "", empty = "Ainda não há publicações por aqui." }: { filter?: string; empty?: string }) {
   const { revision } = useApp();
-  const [posts, setPosts] = useState<Post[] | null>(null), [cursor, setCursor] = useState<number | null>(null), [error, setError] = useState(""), [more, setMore] = useState(false), [retry, setRetry] = useState(0);
-  const filterRef = useRef(filter);
-  useEffect(() => { let live = true; if (filterRef.current !== filter) { setPosts(null); filterRef.current = filter; } api<{ posts: Post[]; cursor: number | null }>(`feed?${filter}`).then(d => { if (live) { setPosts(d.posts); setCursor(d.cursor); setError(""); } }).catch(e => { if (live) setError(e.message); }); return () => { live = false; }; }, [filter, revision, retry]);
-  const load = async () => { setMore(true); try { const d = await api<{ posts: Post[]; cursor: number | null }>(`feed?${filter}&cursor=${cursor}`); setPosts(p => [...(p || []), ...d.posts.filter(n => !p?.some(o => o.id === n.id))]); setCursor(d.cursor); } catch (e) { setError((e as Error).message); } finally { setMore(false); } };
+  type FeedResponse = { posts: Post[]; cursor: string | null };
+  type FeedPost = Post & { cursor?: number; relevance?: number };
+  const feedGeneration = useRef(0);
+  const loadedFilter = useRef<string | null>(null);
+  const feedUrl = (nextCursor?: string | null) => `feed?${filter}${nextCursor ? `&cursor=${encodeURIComponent(nextCursor)}` : ""}`;
+  const [posts, setPosts] = useState<Post[] | null>(null), [cursor, setCursor] = useState<string | null>(null), [error, setError] = useState(""), [more, setMore] = useState(false), [retry, setRetry] = useState(0);
+  useEffect(() => { const generation = ++feedGeneration.current; let live = true; loadedFilter.current = null; setPosts(null); setCursor(null); setError(""); api<FeedResponse>(feedUrl()).then(d => { if (live && generation === feedGeneration.current) { loadedFilter.current = filter; setPosts(d.posts); setCursor(d.cursor); } }).catch(e => { if (live && generation === feedGeneration.current) setError(e.message); }); return () => { live = false; }; }, [filter, retry]);
+  useEffect(() => {
+    if (!revision || !posts || loadedFilter.current !== filter) return;
+    const generation = feedGeneration.current;
+    let live = true;
+    const boundaryId = posts.at(-1)?.id;
+    const targetCount = posts.length;
+    const snapshotIds = new Set(posts.map(post => post.id));
+    (async () => {
+      let page = await api<FeedResponse>(feedUrl());
+      const refreshed: Post[] = [];
+      let reachedBoundary = !boundaryId;
+      if (boundaryId) {
+        for (let attempt = 0; attempt < 100; attempt += 1) {
+          refreshed.push(...page.posts);
+          if (page.posts.some(post => post.id === boundaryId)) { reachedBoundary = true; break; }
+          // If the old boundary was deleted, fetch only enough rows to refill
+          // the already-rendered window instead of scanning the whole feed.
+          if (refreshed.length >= targetCount) { reachedBoundary = true; break; }
+          if (!page.cursor) { reachedBoundary = true; break; }
+          page = await api<FeedResponse>(feedUrl(page.cursor));
+        }
+      } else {
+        refreshed.push(...page.posts);
+      }
+      if (!live || generation !== feedGeneration.current) return;
+      const boundaryIndex = boundaryId ? refreshed.findIndex(post => post.id === boundaryId) : -1;
+      const ordered = boundaryIndex >= 0 ? refreshed.slice(0, boundaryIndex + 1) : refreshed;
+      setPosts(current => {
+        if (!current) return ordered;
+        const fresh = new Map(ordered.map(post => [post.id, post]));
+        const orderedIds = new Set(ordered.map(post => post.id));
+        const merged = ordered.map(post => fresh.get(post.id)!);
+        // Keep pages the user loaded while this refresh was in flight, while
+        // still removing stale cards that were present in the original view.
+        const tail = reachedBoundary
+          ? current.filter(post => !snapshotIds.has(post.id) && !orderedIds.has(post.id))
+          : current.filter(post => !orderedIds.has(post.id));
+        return [...merged, ...tail];
+      });
+      const boundary = boundaryIndex >= 0 ? refreshed[boundaryIndex] as FeedPost : null;
+      if (boundary?.relevance !== undefined && boundary.cursor !== undefined) {
+        setCursor(btoa(JSON.stringify({ relevance: boundary.relevance, rowid: boundary.cursor })).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""));
+      } else setCursor(page.cursor);
+    })().catch(() => { /* The existing page remains usable if a background refresh fails. */ });
+    return () => { live = false; };
+  }, [revision, filter]);
+  const load = async () => { if (!cursor) return; setMore(true); try { const d = await api<FeedResponse>(feedUrl(cursor)); setPosts(p => [...(p || []), ...d.posts.filter(n => !p?.some(o => o.id === n.id))]); setCursor(d.cursor); } catch (e) { setError((e as Error).message); } finally { setMore(false); } };
   return <div className="feed">{error && <ErrorBox message={error} retry={() => setRetry(v => v + 1)} />}{!posts && !error ? <Loading /> : posts?.length ? <>{posts.map(p => <PostCard post={p} key={p.id} />)}{cursor && <button className="load-more secondary" disabled={more} onClick={load}>{more ? <LoaderCircle className="spin" size={18} /> : "Ver mais publicações"}</button>}<p className="feed-end">Você chegou até aqui. Respire um pouco. <Leaf size={14} /></p></> : !error && <Empty title={empty}><p>Explore pessoas e comunidades para descobrir novas conversas.</p><button className="text-button" onClick={() => navigate("explore")}>Explorar a entre <ArrowUpRight size={16} /></button></Empty>}</div>;
 }
 function PostCard({ post: p }: { post: Post }) {
   const { data, requireAuth, run, toast } = useApp();
   const [comments, setComments] = useState(false), [menu, setMenu] = useState(false), [report, setReport] = useState(false), [remove, setRemove] = useState(false), [busy, setBusy] = useState(false);
-  const action = async (path: string, body: unknown, msg?: string) => { if (!requireAuth() || busy) return; setBusy(true); await run(() => api(path, body), msg); setBusy(false); };
+  const [reaction, setReaction] = useState(p.reaction), [likes, setLikes] = useState(p.likes), [dislikes, setDislikes] = useState(p.dislikes), [reposted, setReposted] = useState(!!p.reposted), [reposts, setReposts] = useState(p.reposts), [saved, setSaved] = useState(!!p.saved);
+  useEffect(() => { setReaction(p.reaction); setLikes(p.likes); setDislikes(p.dislikes); setReposted(!!p.reposted); setReposts(p.reposts); setSaved(!!p.saved); }, [p.id, p.reaction, p.likes, p.dislikes, p.reposted, p.reposts, p.saved]);
+  const action = async (path: string, body: unknown, msg?: string) => {
+    if (!requireAuth() || busy) return;
+    setBusy(true);
+    const ok = await run(() => api(path, body), msg);
+    if (ok && path === "reactions") {
+      const value = (body as { value: number }).value, previous = reaction, next = previous === value ? 0 : value;
+      setLikes(current => current + (next === 1 ? 1 : 0) - (previous === 1 ? 1 : 0));
+      setDislikes(current => current + (next === -1 ? 1 : 0) - (previous === -1 ? 1 : 0));
+      setReaction(next);
+    }
+    if (ok && path === "reposts") { setReposted(current => !current); setReposts(current => current + (reposted ? -1 : 1)); }
+    if (ok && path === "bookmarks") setSaved(current => !current);
+    setBusy(false);
+  };
   return <article className={`post-card ${p.kind === "text" ? "text-post" : ""}`}>
     {p.community_name && <button className="post-community" onClick={() => navigate(`community/${p.community_id}`)}><UsersRound size={13} />Em {p.community_name}<ArrowUpRight size={12} /></button>}
     <div className="post-header"><Avatar person={p} onClick={() => navigate(`profile/${p.user_id}`)} /><div className="post-author"><button onClick={() => navigate(`profile/${p.user_id}`)}>{p.name}</button><span>@{p.handle}<i>·</i><time dateTime={new Date(p.created_at).toISOString()}>{ago(p.created_at)}</time></span></div><div className="post-menu"><button className="icon-button" aria-label="Opções da publicação" aria-expanded={menu} onClick={() => setMenu(!menu)}><MoreHorizontal size={22} /></button>{menu && <><button className="menu-dismiss" aria-label="Fechar opções" onClick={() => setMenu(false)} /><div className="dropdown">{data.me?.id === p.user_id ? <button onClick={() => { setMenu(false); setRemove(true); }}><Trash2 size={16} />Excluir publicação</button> : <button onClick={() => { setMenu(false); if (requireAuth()) setReport(true); }}><Flag size={16} />Denunciar publicação</button>}<button onClick={async () => { setMenu(false); try { await navigator.clipboard.writeText(`${location.origin}/#profile/${p.user_id}`); toast("Link do perfil copiado."); } catch { toast("Não foi possível copiar o link neste navegador."); } }}><ArrowUpRight size={16} />Copiar link do perfil</button></div></>}</div></div>
@@ -110,7 +178,7 @@ function PostCard({ post: p }: { post: Post }) {
     {p.kind === "photo" && p.media && <div className="post-photo"><img src={p.media} alt={p.title || p.body.slice(0, 200) || `Fotografia publicada por ${p.name}`} loading="lazy" /></div>}
     {p.kind === "video" && p.media && <video className="post-video" controls preload="metadata" playsInline src={p.media}>Seu navegador não suporta este vídeo.</video>}
     {!!p.tags && <div className="post-tags">{p.tags.split(",").filter(Boolean).map(tag => <button key={tag} onClick={() => navigate(`explore/${encodeURIComponent(tag)}`)}>#{tag}</button>)}</div>}
-    <div className="post-actions"><button aria-label={`Curtir${p.reaction === 1 ? ", selecionado" : ""}`} aria-pressed={p.reaction === 1} className={p.reaction === 1 ? "liked" : ""} disabled={busy} onClick={() => action("reactions", { postId: p.id, value: 1 })}><Heart size={19} fill={p.reaction === 1 ? "currentColor" : "none"} /><span>{fmt.format(p.likes)}</span></button><button aria-label="Não gostei" title="Não gostei" aria-pressed={p.reaction === -1} className={p.reaction === -1 ? "disliked" : ""} disabled={busy} onClick={() => action("reactions", { postId: p.id, value: -1 })}><ThumbsDown size={18} /><span>{fmt.format(p.dislikes)}</span></button><button aria-label="Abrir comentários" onClick={() => setComments(true)}><MessageCircle size={19} /><span>{fmt.format(p.comments)}</span></button><button aria-label={p.reposted ? "Desfazer repost" : "Repostar"} aria-pressed={!!p.reposted} className={p.reposted ? "selected" : ""} disabled={busy} onClick={() => action("reposts", { postId: p.id }, p.reposted ? "Repost desfeito." : "Publicação adicionada ao seu perfil e ao feed de quem te segue.")}><Repeat2 size={20} /><span>{fmt.format(p.reposts)}</span></button><button className={`save-action ${p.saved ? "selected" : ""}`} aria-label={p.saved ? "Remover dos guardados" : "Guardar publicação"} aria-pressed={!!p.saved} disabled={busy} onClick={() => action("bookmarks", { postId: p.id }, p.saved ? "Removido dos guardados." : "Guardado para outra hora.")}><Bookmark size={19} fill={p.saved ? "currentColor" : "none"} /></button></div>
+    <div className="post-actions"><button aria-label={`Curtir${reaction === 1 ? ", selecionado" : ""}`} aria-pressed={reaction === 1} className={reaction === 1 ? "liked" : ""} disabled={busy} onClick={() => action("reactions", { postId: p.id, value: 1 })}><Heart size={19} fill={reaction === 1 ? "currentColor" : "none"} /><span>{fmt.format(likes)}</span></button><button aria-label="Não gostei" title="Não gostei" aria-pressed={reaction === -1} className={reaction === -1 ? "disliked" : ""} disabled={busy} onClick={() => action("reactions", { postId: p.id, value: -1 })}><ThumbsDown size={18} /><span>{fmt.format(dislikes)}</span></button><button aria-label="Abrir comentários" onClick={() => setComments(true)}><MessageCircle size={19} /><span>{fmt.format(p.comments)}</span></button><button aria-label={reposted ? "Desfazer repost" : "Repostar"} aria-pressed={reposted} className={reposted ? "selected" : ""} disabled={busy} onClick={() => action("reposts", { postId: p.id }, reposted ? "Repost desfeito." : "Publicação adicionada ao seu perfil e ao feed de quem te segue.")}><Repeat2 size={20} /><span>{fmt.format(reposts)}</span></button><button className={`save-action ${saved ? "selected" : ""}`} aria-label={saved ? "Remover dos guardados" : "Guardar publicação"} aria-pressed={saved} disabled={busy} onClick={() => action("bookmarks", { postId: p.id }, saved ? "Removido dos guardados." : "Guardado para outra hora.")}><Bookmark size={19} fill={saved ? "currentColor" : "none"} /></button></div>
     {comments && <CommentsModal post={p} close={() => setComments(false)} />}
     {report && <Modal title="Denunciar publicação" close={() => setReport(false)}><SimpleTextForm label="O que aconteceu?" placeholder="Conte por que esta publicação precisa de revisão." button="Enviar denúncia" max={1000} submit={async body => { const ok = await run(() => api("reports", { postId: p.id, reason: body }), "Denúncia registrada para revisão."); if (ok) setReport(false); return ok; }} /></Modal>}
     {remove && <Modal title="Excluir esta publicação?" close={() => setRemove(false)}><div className="prose"><p>A publicação e seus comentários serão removidos permanentemente.</p><button className="primary danger" disabled={busy} onClick={async () => { setBusy(true); if (await run(() => api(`posts/${p.id}`, {}, "DELETE"), "Publicação excluída.")) setRemove(false); setBusy(false); }}>Excluir publicação</button></div></Modal>}
@@ -121,9 +189,41 @@ function SimpleTextForm({ label, placeholder, button, max, submit }: { label: st
   return <form className="form-stack" onSubmit={async e => { e.preventDefault(); if (!value.trim() || busy) return; setBusy(true); if (await submit(value)) setValue(""); setBusy(false); }}><label>{label}<textarea required maxLength={max} placeholder={placeholder} value={value} onChange={e => setValue(e.target.value)} rows={5} /></label><div className="form-bottom"><span>{value.length}/{max}</span><button className="primary" disabled={busy || !value.trim()}>{busy && <LoaderCircle className="spin" size={16} />}{button}</button></div></form>;
 }
 function CommentsModal({ post, close }: { post: Post; close: () => void }) {
-  const { revision, requireAuth, run, data } = useApp(); const [comments, setComments] = useState<Comment[] | null>(null), [error, setError] = useState("");
-  useEffect(() => { let live = true; api<Comment[]>(`comments/${post.id}`).then(d => { if (live) setComments(d); }).catch(e => { if (live) setError(e.message); }); return () => { live = false; }; }, [post.id, revision]);
-  return <Modal title="A conversa continua." close={close}><div className="comments-list"><p className="comment-context">{post.body.slice(0, 180)}</p>{error ? <ErrorBox message={error} /> : !comments ? <Loading /> : comments.length ? comments.map(c => <div className="comment" key={c.id}><Avatar person={c} size="small" onClick={() => { close(); navigate(`profile/${c.user_id}`); }} /><div><strong>{c.name} <time>{ago(c.created_at)}</time></strong><p>{c.body}</p></div></div>) : <p className="muted">A conversa está aberta. Seja a primeira pessoa a comentar.</p>}</div>{data.me ? <SimpleTextForm label="Seu comentário" placeholder="Acrescente algo à conversa…" button="Comentar" max={2000} submit={body => run(() => api("comments", { postId: post.id, body }))} /> : <button className="primary modal-login" onClick={requireAuth}>Entrar para comentar</button>}</Modal>;
+  const { requireAuth, run, data } = useApp();
+  type CommentPage = Comment & { cursor?: number };
+  const commentsRef = useRef<CommentPage[]>([]);
+  const [comments, setComments] = useState<CommentPage[] | null>(null), [cursor, setCursor] = useState<number | null>(null), [loadingMore, setLoadingMore] = useState(false), [error, setError] = useState("");
+  const load = useCallback(async (nextCursor?: number | null, replace = false) => {
+    const fetchPage = (pageCursor?: number | null) => api<{ comments: CommentPage[]; cursor: number | null }>(`comments/${post.id}${pageCursor === null || pageCursor === undefined ? "" : `?cursor=${pageCursor}`}`);
+    let result = await fetchPage(nextCursor);
+    const pages = [result];
+    const newestLoaded = commentsRef.current.at(-1)?.id;
+    if (!replace && nextCursor == null) {
+      // Polling should only fetch forward from the newest loaded comment. If
+      // more than one page arrived, walk back until that boundary is found;
+      // older history remains behind the explicit "load older" action.
+      for (let attempt = 0; newestLoaded && result.cursor !== null && !result.comments.some(comment => comment.id === newestLoaded) && attempt < 100; attempt += 1) {
+        result = await fetchPage(result.cursor);
+        pages.push(result);
+      }
+    }
+    const incoming = pages.flatMap(page => page.comments);
+    setError("");
+    setComments(current => {
+      const base = replace || !current ? [] : current;
+      const merged = new Map(base.map(comment => [comment.id, comment]));
+      incoming.forEach(comment => merged.set(comment.id, comment));
+      const sorted = [...merged.values()].sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id));
+      commentsRef.current = sorted;
+      return sorted;
+    });
+    if (replace || nextCursor !== undefined) setCursor(pages.at(-1)?.cursor ?? null);
+  }, [post.id]);
+  useEffect(() => { let live = true; commentsRef.current = []; setComments(null); setCursor(null); setError(""); load(null, true).catch(e => { if (live) setError(e.message); }); return () => { live = false; }; }, [load]);
+  useEffect(() => { const timer = setInterval(() => { if (!document.hidden) load(null).catch(e => setError(e.message)); }, 10000); return () => clearInterval(timer); }, [load]);
+  const loadOlder = async () => { if (!cursor || loadingMore) return; setLoadingMore(true); try { await load(cursor); } catch (e) { setError((e as Error).message); } finally { setLoadingMore(false); } };
+  const submit = async (body: string) => { const ok = await run(() => api("comments", { postId: post.id, body }), "Comentário publicado."); if (ok) { try { await load(null); } catch { /* keep the newly submitted form usable if refresh is delayed */ } } return ok; };
+  return <Modal title="A conversa continua." close={close}><div className="comments-list"><p className="comment-context">{post.body.slice(0, 180)}</p>{error ? <ErrorBox message={error} /> : !comments ? <Loading /> : <>{!!cursor && <button className="secondary load-more-comments" disabled={loadingMore} onClick={loadOlder}>{loadingMore ? <LoaderCircle className="spin" size={17} /> : "Ver comentários anteriores"}</button>}{comments.length ? comments.map(c => <div className="comment" key={c.id}><Avatar person={c} size="small" onClick={() => { close(); navigate(`profile/${c.user_id}`); }} /><div><strong>{c.name} <time>{ago(c.created_at)}</time></strong><p>{c.body}</p></div></div>) : <p className="muted">A conversa está aberta. Seja a primeira pessoa a comentar.</p>}</>}</div>{data.me ? <SimpleTextForm label="Seu comentário" placeholder="Acrescente algo à conversa…" button="Comentar" max={2000} submit={submit} /> : <button className="primary modal-login" onClick={requireAuth}>Entrar para comentar</button>}</Modal>;
 }
 
 function RightRail() {
@@ -135,7 +235,7 @@ function Explore({ query }: { query: string }) {
   const { data } = useApp(); const [tab, setTab] = useState("all"); const term = query.toLocaleLowerCase("pt-BR");
   const people = data.users.filter(u => `${u.name} ${u.handle} ${u.interests} ${u.bio}`.toLocaleLowerCase("pt-BR").includes(term));
   const communities = data.communities.filter(c => `${c.name} ${c.category} ${c.description}`.toLocaleLowerCase("pt-BR").includes(term));
-  return <><PageHeading eyebrow="FORA DA SUA BOLHA" title={query ? `Sobre “${query}”.` : "Siga a curiosidade."} description={query ? "Pessoas, comunidades e publicações pelo mesmo caminho." : "Encontre gente que enxerga o mundo de outros jeitos."} /><div className="interest-tags">{["fotografia", "música", "cinema", "literatura", "arte", "cotidiano"].map(t => <button key={t} className={query === t ? "active" : ""} onClick={() => navigate(`explore/${t}`)}>#{t}</button>)}</div><div className="feed-tabs" role="tablist" aria-label="Resultados da busca">{[["all", "Tudo"], ["people", "Pessoas"], ["communities", "Comunidades"], ["posts", "Publicações"]].map(([v, label]) => <button role="tab" aria-selected={tab === v} className={tab === v ? "active" : ""} key={v} onClick={() => setTab(v)}>{label}</button>)}</div>{["all", "people"].includes(tab) && <section className="explore-section"><h2 className="subheading">Pessoas para conhecer <span>{people.length}</span></h2><div className="people-grid">{people.map(u => <PersonCard key={u.id} person={u} />)}</div>{!people.length && <p className="muted">Nenhuma pessoa encontrada para esta busca.</p>}</section>}{["all", "communities"].includes(tab) && <section className="explore-section"><h2 className="subheading">Conversas com endereço <span>{communities.length}</span></h2><div className="community-grid">{communities.slice(0, tab === "all" ? 2 : 100).map(c => <CommunityCard key={c.id} community={c} />)}</div>{!communities.length && <p className="muted">Nenhuma comunidade encontrada.</p>}</section>}{["all", "posts"].includes(tab) && <section className="explore-section"><h2 className="subheading">O que estão compartilhando</h2><Feed filter={`q=${encodeURIComponent(query)}`} /></section>}</>;
+  return <><PageHeading eyebrow="FORA DA SUA BOLHA" title={query ? `Sobre “${query}”.` : "Siga a curiosidade."} description={query ? "Pessoas, comunidades e publicações pelo mesmo caminho." : "Encontre gente que enxerga o mundo de outros jeitos."} /><div className="interest-tags">{["fotografia", "música", "cinema", "literatura", "arte", "cotidiano"].map(t => <button key={t} className={query === t ? "active" : ""} onClick={() => navigate(`explore/${encodeURIComponent(t)}`)}>#{t}</button>)}</div><div className="feed-tabs" role="tablist" aria-label="Resultados da busca">{[["all", "Tudo"], ["people", "Pessoas"], ["communities", "Comunidades"], ["posts", "Publicações"]].map(([v, label]) => <button role="tab" aria-selected={tab === v} className={tab === v ? "active" : ""} key={v} onClick={() => setTab(v)}>{label}</button>)}</div>{["all", "people"].includes(tab) && <section className="explore-section"><h2 className="subheading">Pessoas para conhecer <span>{people.length}</span></h2><div className="people-grid">{people.map(u => <PersonCard key={u.id} person={u} />)}</div>{!people.length && <p className="muted">Nenhuma pessoa encontrada para esta busca.</p>}</section>}{["all", "communities"].includes(tab) && <section className="explore-section"><h2 className="subheading">Conversas com endereço <span>{communities.length}</span></h2><div className="community-grid">{communities.slice(0, tab === "all" ? 2 : 100).map(c => <CommunityCard key={c.id} community={c} />)}</div>{!communities.length && <p className="muted">Nenhuma comunidade encontrada.</p>}</section>}{["all", "posts"].includes(tab) && <section className="explore-section"><h2 className="subheading">O que estão compartilhando</h2><Feed filter={`q=${encodeURIComponent(query)}`} /></section>}</>;
 }
 function FollowButton({ person }: { person: Person }) {
   const { requireAuth, run } = useApp(); const [busy, setBusy] = useState(false);
@@ -150,11 +250,16 @@ function Communities() {
 function CommunityCard({ community: c }: { community: Community }) {
   return <article className="community-card"><button className="community-cover" style={{ backgroundColor: c.color, backgroundImage: c.cover ? `linear-gradient(0deg,rgba(0,0,0,.12),transparent),url("${c.cover}")` : undefined }} onClick={() => navigate(`community/${c.id}`)} aria-label={`Conhecer ${c.name}`}><span>{c.category}</span>{!c.cover && <span className="community-monogram">{c.name.slice(0, 1)}</span>}</button><div className="community-card-content"><button onClick={() => navigate(`community/${c.id}`)}><h2>{c.name}</h2></button><p>{c.description}</p><div className="community-card-bottom"><span><UsersRound size={14} /> {fmt.format(c.members)} pessoas</span><JoinButton community={c} /></div></div></article>;
 }
-function JoinButton({ community: c }: { community: Community }) { const { requireAuth, run } = useApp(); const [busy, setBusy] = useState(false); return <button className={`join-button ${c.joined ? "joined" : ""}`} disabled={busy} onClick={async () => { if (!requireAuth()) return; setBusy(true); await run(() => api("memberships", { communityId: c.id }), c.joined ? "Você saiu da comunidade." : "Você faz parte dessa turma agora."); setBusy(false); }}>{c.joined ? <Check size={14} /> : <Plus size={14} />}{c.joined ? "Participando" : "Participar"}</button>; }
+function JoinButton({ community: c, onChanged }: { community: Community; onChanged?: (joined: number) => void }) { const { requireAuth, run } = useApp(); const [busy, setBusy] = useState(false); return <button className={`join-button ${c.joined ? "joined" : ""}`} disabled={busy} onClick={async () => { if (!requireAuth()) return; setBusy(true); const joined = c.joined ? 0 : 1; const ok = await run(() => api("memberships", { communityId: c.id }), joined ? "Você faz parte dessa turma agora." : "Você saiu da comunidade."); if (ok) onChanged?.(joined); setBusy(false); }}>{c.joined ? <Check size={14} /> : <Plus size={14} />}{c.joined ? "Participando" : "Participar"}</button>; }
 function CommunityPage({ id }: { id: string }) {
-  const { data, compose } = useApp(); const c = data.communities.find(c => c.id === id);
-  if (!c) return <Empty title="Comunidade não encontrada."><button className="text-button" onClick={() => navigate("communities")}>Ver comunidades</button></Empty>;
-  return <><button className="back-button" onClick={() => navigate("communities")}><ArrowLeft size={17} />Comunidades</button><div className="community-detail-cover" style={{ backgroundColor: c.color, backgroundImage: c.cover ? `linear-gradient(0deg,rgba(0,0,0,.2),transparent),url("${c.cover}")` : undefined }}><span>{c.category}</span>{!c.cover && <span className="community-monogram">{c.name[0]}</span>}</div><div className="community-detail-head"><p className="eyebrow">PONTO DE ENCONTRO</p><h1>{c.name}</h1><p>{c.description}</p><div><span><UsersRound size={17} />{fmt.format(c.members)} pessoas</span><JoinButton community={c} /></div></div><div className="section-bar"><h2>Conversas da comunidade</h2><button className="text-button" disabled={!c.joined} onClick={() => compose("text", c.id)}><Plus size={16} />Puxar conversa</button></div>{!c.joined && <p className="join-notice">Entre na comunidade para publicar e começar uma conversa.</p>}<Feed filter={`communityId=${encodeURIComponent(id)}`} empty="Quem vai puxar a primeira conversa?" /></>;
+  const { data, revision, compose } = useApp();
+  const [community, setCommunity] = useState<Community | null>(() => data.communities.find(c => c.id === id) || null), [loading, setLoading] = useState(true), [error, setError] = useState("");
+  useEffect(() => { let live = true; setCommunity(current => current?.id === id ? current : null); setLoading(true); setError(""); api<{ community: Community }>(`communities/${encodeURIComponent(id)}`).then(result => { if (live) { setCommunity(result.community); setLoading(false); } }).catch(e => { if (live) { setCommunity(null); setError(e.message); setLoading(false); } }); return () => { live = false; }; }, [id, revision]);
+  useEffect(() => { const latest = data.communities.find(item => item.id === id); if (latest) setCommunity(current => current ? { ...current, ...latest } : latest); }, [data.communities, id]);
+  const c = community;
+  if ((loading && !c) || (c && c.id !== id)) return <Loading />;
+  if (error || !c) return <ErrorBox message={error || "Comunidade não encontrada."} />;
+  return <><button className="back-button" onClick={() => navigate("communities")}><ArrowLeft size={17} />Comunidades</button><div className="community-detail-cover" style={{ backgroundColor: c.color, backgroundImage: c.cover ? `linear-gradient(0deg,rgba(0,0,0,.2),transparent),url("${c.cover}")` : undefined }}><span>{c.category}</span>{!c.cover && <span className="community-monogram">{c.name[0]}</span>}</div><div className="community-detail-head"><p className="eyebrow">PONTO DE ENCONTRO</p><h1>{c.name}</h1><p>{c.description}</p><div><span><UsersRound size={17} />{fmt.format(c.members)} pessoas</span><JoinButton community={c} onChanged={joined => setCommunity(current => current ? { ...current, joined, members: Math.max(0, current.members + (joined ? 1 : -1)) } : current)} /></div></div><div className="section-bar"><h2>Conversas da comunidade</h2><button className="text-button" disabled={!c.joined} onClick={() => compose("text", c.id)}><Plus size={16} />Puxar conversa</button></div>{!c.joined && <p className="join-notice">Entre na comunidade para publicar e começar uma conversa.</p>}<Feed filter={`communityId=${encodeURIComponent(id)}`} empty="Quem vai puxar a primeira conversa?" /></>;
 }
 function CreateCommunity({ close }: { close: () => void }) { const { run } = useApp(); const [busy, setBusy] = useState(false); return <Modal title="Uma nova turma." close={close}><form className="form-stack" onSubmit={async e => { e.preventDefault(); if (busy) return; const f = new FormData(e.currentTarget); setBusy(true); let result: any; const ok = await run(async () => { result = await api("communities", Object.fromEntries(f)); }, "Comunidade criada. A primeira conversa é sua."); setBusy(false); if (ok) { close(); navigate(`community/${result.id}`); } }}><label>Nome da comunidade<input name="name" placeholder="O que vocês têm em comum?" required maxLength={70} /></label><label>Sobre a comunidade<textarea name="description" placeholder="Apresente o seu ponto de encontro." required maxLength={500} rows={4} /></label><label>Categoria<select name="category">{["Arte", "Fotografia", "Música", "Cinema", "Literatura", "Cotidiano", "Tecnologia", "Outros"].map(c => <option key={c}>{c}</option>)}</select></label><p className="fine-print">Comunidades e suas publicações são públicas. Quem cria também passa a participar.</p><button className="primary" disabled={busy}>{busy && <LoaderCircle size={16} className="spin" />}Criar comunidade <ArrowRight size={17} /></button></form></Modal>; }
 

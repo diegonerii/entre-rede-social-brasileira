@@ -6,6 +6,23 @@ const fail = (status: number, message: string): never => { throw new ApiError(st
 const json = (data: unknown, status = 200) => Response.json(data, { status, headers: { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" } });
 const id = () => crypto.randomUUID();
 const now = () => Date.now();
+type FeedCursor = { relevance: number; rowid: number };
+function encodeFeedCursor(cursor: FeedCursor) {
+  return btoa(JSON.stringify(cursor)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+function decodeFeedCursor(value: string): FeedCursor {
+  try {
+    const normalized = value.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(value.length / 4) * 4, "=");
+    const parsed = JSON.parse(atob(normalized)) as Partial<FeedCursor>;
+    const relevance = parsed.relevance, rowid = parsed.rowid;
+    if (typeof rowid !== "number" || !Number.isSafeInteger(rowid) || rowid < 0 || typeof relevance !== "number" || !Number.isFinite(relevance)) fail(400, "Cursor inválido.");
+    return { relevance: relevance as number, rowid: rowid as number };
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    fail(400, "Cursor inválido.");
+  }
+  return { relevance: 0, rowid: 0 };
+}
 function text(value: unknown, max: number, required = false) {
   if (typeof value !== "string") { if (required) fail(400, "Preencha os campos obrigatórios."); return ""; }
   const v = value.trim();
@@ -59,24 +76,46 @@ async function dispatch(request: Request, { db, bucket, user, localPreview }: Ap
     if (request.headers.get("origin") !== url.origin) fail(403, "Origem da requisição inválida.");
   }
   if (user) {
-    await run("INSERT OR IGNORE INTO users(id,handle,name,created_at) VALUES(?,?,?,?)", me, `pessoa_${me.replace(/[^a-zA-Z0-9]/g, "").slice(0, 20)}_${await shortHash(me)}`, user.name.slice(0, 60), now());
+    const handleBase = me.replace(/[^a-zA-Z0-9_]/g, "").toLowerCase().slice(0, 14) || "user";
+    const defaultHandle = `pessoa_${handleBase}_${await shortHash(me)}`;
+    await run("INSERT OR IGNORE INTO users(id,handle,name,created_at) VALUES(?,?,?,?)", me, defaultHandle, user.name.slice(0, 60), now());
   }
   if (path === "bootstrap" && method === "GET") {
     const profile = user ? await one("SELECT * FROM users WHERE id=?", me) : null;
+    const profileInterests = String(profile?.interests || "").split(",").map(value => value.trim().toLowerCase()).filter(Boolean).slice(0, 8);
+    const affinitySql = profileInterests.length ? profileInterests.map(() => "CASE WHEN lower(COALESCE(u.interests,'')) LIKE ? OR lower(COALESCE(u.bio,'')) LIKE ? THEN 1 ELSE 0 END").join(" + ") : "0";
     const people = await all(`SELECT u.*, EXISTS(SELECT 1 FROM follows WHERE follower_id=? AND following_id=u.id) AS isFollowing,
       (SELECT COUNT(*) FROM follows WHERE following_id=u.id) AS followers,
       (SELECT COUNT(*) FROM follows a JOIN follows b ON a.following_id=b.following_id WHERE a.follower_id=? AND b.follower_id=u.id) +
-      (SELECT COUNT(*) FROM memberships a JOIN memberships b ON a.community_id=b.community_id WHERE a.user_id=? AND b.user_id=u.id) AS common
+      (SELECT COUNT(*) FROM memberships a JOIN memberships b ON a.community_id=b.community_id WHERE a.user_id=? AND b.user_id=u.id) AS common,
+      ${affinitySql} AS affinity
       FROM users u WHERE u.id!=? AND NOT EXISTS(SELECT 1 FROM blocks WHERE (user_id=? AND blocked_id=u.id) OR (user_id=u.id AND blocked_id=?))
-      ORDER BY isFollowing ASC, common DESC, u.created_at ASC LIMIT 60`, me, me, me, me, me, me);
+      ORDER BY isFollowing ASC, affinity DESC, common DESC, u.created_at ASC LIMIT 60`,
+      me, me, me, ...profileInterests.flatMap(value => [`%${value}%`, `%${value}%`]), me, me, me);
     const groups = await all(`SELECT c.*, (SELECT COUNT(*) FROM memberships WHERE community_id=c.id) AS members,
       EXISTS(SELECT 1 FROM memberships WHERE community_id=c.id AND user_id=?) AS joined FROM communities c ORDER BY members DESC,c.created_at LIMIT 100`, me);
+    const joinedGroups = me ? await all(`SELECT c.*, (SELECT COUNT(*) FROM memberships WHERE community_id=c.id) AS members,
+      1 AS joined FROM communities c WHERE EXISTS(SELECT 1 FROM memberships WHERE community_id=c.id AND user_id=?) ORDER BY c.created_at DESC`, me) : [];
+    const communities = Array.from(new Map([...groups, ...joinedGroups].map(group => [group.id, group])).values());
     const unread = me ? await one("SELECT COUNT(*) AS n FROM notifications WHERE user_id=? AND read=0", me) : { n: 0 };
     const unreadMessages = me ? await one("SELECT COUNT(*) AS n FROM messages WHERE to_id=? AND read=0 AND NOT EXISTS(SELECT 1 FROM blocks WHERE (user_id=? AND blocked_id=messages.from_id) OR (user_id=messages.from_id AND blocked_id=?))", me, me, me) : { n: 0 };
-    return json({ me: profile, users: people, communities: groups, unread: unread?.n, unreadMessages: unreadMessages?.n, localPreview: !!localPreview });
+    return json({ me: profile, users: people, communities, unread: unread?.n, unreadMessages: unreadMessages?.n, localPreview: !!localPreview });
   }
   if (path === "feed" && method === "GET") {
-    const args: any[] = [me, me, me, me, me];
+    const viewer = me ? await one<{ interests?: string }>("SELECT interests FROM users WHERE id=?", me) : null;
+    const interestTerms = String(viewer?.interests || "").split(",").map(value => value.trim().toLowerCase()).filter(Boolean).slice(0, 8);
+    const relevanceArgs: any[] = [];
+    let relevance = "0";
+    if (me) {
+      relevance = "(CASE WHEN p.user_id=? THEN 4 ELSE 0 END + CASE WHEN EXISTS(SELECT 1 FROM follows WHERE follower_id=? AND following_id=p.user_id) THEN 6 ELSE 0 END + CASE WHEN EXISTS(SELECT 1 FROM memberships mine JOIN memberships shared ON shared.community_id=mine.community_id WHERE mine.user_id=? AND shared.user_id=? AND shared.community_id=p.community_id) THEN 3 ELSE 0 END";
+      relevanceArgs.push(me, me, me, me);
+      for (const term of interestTerms) {
+        relevance += " + CASE WHEN lower(COALESCE(p.tags,'')) LIKE ? OR lower(COALESCE(p.body,'')) LIKE ? OR lower(COALESCE(p.title,'')) LIKE ? THEN 2 ELSE 0 END";
+        relevanceArgs.push(`%${term}%`, `%${term}%`, `%${term}%`);
+      }
+      relevance += ")";
+    }
+    const args: any[] = [...relevanceArgs, me, me, me, me, me];
     let where = "NOT EXISTS(SELECT 1 FROM blocks WHERE (user_id=? AND blocked_id=p.user_id) OR (user_id=p.user_id AND blocked_id=?))";
     if (q.get("userId")) { where += " AND (p.user_id=? OR EXISTS(SELECT 1 FROM reposts WHERE post_id=p.id AND user_id=?))"; args.push(q.get("userId"), q.get("userId")); }
     else if (q.get("tab") === "following") { where += " AND (p.user_id=? OR EXISTS(SELECT 1 FROM follows WHERE follower_id=? AND following_id=p.user_id) OR EXISTS(SELECT 1 FROM reposts r JOIN follows f ON f.following_id=r.user_id WHERE r.post_id=p.id AND f.follower_id=?))"; args.push(me, me, me); }
@@ -84,8 +123,14 @@ async function dispatch(request: Request, { db, bucket, user, localPreview }: Ap
     if (q.get("communityId")) { where += " AND p.community_id=?"; args.push(q.get("communityId")); }
     if (q.get("saved") === "1") { requireUser(); where += " AND EXISTS(SELECT 1 FROM bookmarks WHERE post_id=p.id AND user_id=?)"; args.push(me); }
     if (q.get("q")) { where += " AND (p.body LIKE ? ESCAPE '\\' OR p.title LIKE ? ESCAPE '\\' OR p.tags LIKE ? ESCAPE '\\')"; const term = `%${text(q.get("q"), 100).replace(/[\\%_]/g, "\\$&")}%`; args.push(term, term, term); }
-    if (q.get("cursor")) { const cursor = Number(q.get("cursor")); if (!Number.isSafeInteger(cursor) || cursor < 0) fail(400, "Cursor inválido."); where += " AND p.rowid<?"; args.push(cursor); }
+    const rawCursor = q.get("cursor");
+    if (rawCursor) {
+      const cursor = decodeFeedCursor(rawCursor);
+      where += ` AND ((${relevance}) < ? OR ((${relevance}) = ? AND p.rowid<?))`;
+      args.push(...relevanceArgs, cursor.relevance, ...relevanceArgs, cursor.relevance, cursor.rowid);
+    }
     const rows = await all(`SELECT p.*, p.rowid AS cursor,u.name,u.handle,u.avatar,c.name AS community_name,
+      ${relevance} AS relevance,
       (SELECT COUNT(*) FROM reactions WHERE post_id=p.id AND value=1) AS likes,
       (SELECT COUNT(*) FROM reactions WHERE post_id=p.id AND value=-1) AS dislikes,
       (SELECT COUNT(*) FROM comments WHERE post_id=p.id) AS comments,
@@ -93,9 +138,10 @@ async function dispatch(request: Request, { db, bucket, user, localPreview }: Ap
       COALESCE((SELECT value FROM reactions WHERE post_id=p.id AND user_id=?),0) AS reaction,
       EXISTS(SELECT 1 FROM reposts WHERE post_id=p.id AND user_id=?) AS reposted,
       EXISTS(SELECT 1 FROM bookmarks WHERE post_id=p.id AND user_id=?) AS saved
-      FROM posts p JOIN users u ON u.id=p.user_id LEFT JOIN communities c ON c.id=p.community_id WHERE ${where} ORDER BY p.rowid DESC LIMIT 21`, ...args);
+      FROM posts p JOIN users u ON u.id=p.user_id LEFT JOIN communities c ON c.id=p.community_id WHERE ${where}
+      ORDER BY relevance DESC, p.rowid DESC LIMIT 21`, ...args);
     const hasMore = rows.length > 20;
-    return json({ posts: rows.slice(0, 20), cursor: hasMore ? rows[19].cursor : null });
+    return json({ posts: rows.slice(0, 20), cursor: hasMore ? encodeFeedCursor({ relevance: Number(rows[19].relevance || 0), rowid: Number(rows[19].cursor) }) : null });
   }
   if (path.startsWith("users/") && method === "GET") {
     const target = decodeURIComponent(path.slice(6)); await existsUser(target);
@@ -107,10 +153,25 @@ async function dispatch(request: Request, { db, bucket, user, localPreview }: Ap
       AND NOT EXISTS(SELECT 1 FROM blocks WHERE (user_id=? AND blocked_id=t.from_id) OR (user_id=t.from_id AND blocked_id=?)) ORDER BY t.created_at DESC LIMIT 100`, target, me, me, me, me);
     return json({ profile, testimonials });
   }
+  if (path.startsWith("communities/") && method === "GET") {
+    const target = decodeURIComponent(path.slice("communities/".length));
+    const community = await one(`SELECT c.*, (SELECT COUNT(*) FROM memberships WHERE community_id=c.id) AS members,
+      EXISTS(SELECT 1 FROM memberships WHERE community_id=c.id AND user_id=?) AS joined FROM communities c WHERE c.id=?`, me, target);
+    if (!community) fail(404, "Comunidade não encontrada.");
+    return json({ community });
+  }
   if (path.startsWith("comments/") && method === "GET") {
     const target = decodeURIComponent(path.slice(9)); await getPost(target);
-    return json(await all(`SELECT c.*,u.name,u.handle,u.avatar FROM comments c JOIN users u ON u.id=c.user_id WHERE c.post_id=?
-      AND NOT EXISTS(SELECT 1 FROM blocks WHERE (user_id=? AND blocked_id=c.user_id) OR (user_id=c.user_id AND blocked_id=?)) ORDER BY c.created_at LIMIT 200`, target, me, me));
+    const rawCursor = q.get("cursor");
+    const cursor = rawCursor === null || rawCursor === "" ? undefined : Number(rawCursor);
+    if (cursor !== undefined && (!Number.isSafeInteger(cursor) || cursor < 0)) fail(400, "Cursor inválido.");
+    const cursorFilter = cursor === undefined ? "" : " AND c.rowid<?";
+    const args = cursor === undefined ? [target, me, me] : [target, me, me, cursor];
+    const rows = await all(`SELECT c.*, c.rowid AS cursor,u.name,u.handle,u.avatar FROM comments c JOIN users u ON u.id=c.user_id WHERE c.post_id=?
+      AND NOT EXISTS(SELECT 1 FROM blocks WHERE (user_id=? AND blocked_id=c.user_id) OR (user_id=c.user_id AND blocked_id=?))${cursorFilter} ORDER BY c.rowid DESC LIMIT 201`, ...args);
+    const hasMore = rows.length > 200;
+    const comments = rows.slice(0, 200).reverse();
+    return json({ comments, cursor: hasMore ? rows[199].cursor : null });
   }
   if (path === "messages" && method === "GET") {
     requireUser(); const peer = q.get("peer");

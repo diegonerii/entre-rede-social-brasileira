@@ -17,7 +17,7 @@ Uma rede social brasileira para textos, fotografias, vídeos, conversas e comuni
 
 ## Identidade visual
 
-O design segue uma direção editorial e brasileira: marfim, verde profundo, verde-lima suave, serif expressiva para títulos e DM Sans para leitura. A marca usa “entre” como uma ideia de espaço e encontro, com microtipografia em português e sem emojis de sistema ou mensagens genéricas de template.
+O design segue uma direção editorial e brasileira: marfim, verde profundo, verde-lima suave, Manrope para títulos e DM Sans para leitura. A marca usa “entre” como uma ideia de espaço e encontro, com microtipografia em português e sem emojis de sistema ou mensagens genéricas de template.
 
 ## Desenvolvimento local
 
@@ -42,6 +42,34 @@ node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1
 ## Dados e privacidade
 
 O schema fica em `db/schema.ts` e as migrações em `drizzle/`. A identidade de produção é fornecida pelo login da plataforma, usando `oai-authenticated-user-id` como chave estável. O conteúdo de posts e uploads é público por design; mensagens e relações de bloqueio são verificadas no servidor. Não há segredos no repositório.
+
+## Deploy na Magalu Cloud
+
+O caminho de runtime equivalente a um serviço de container gerenciado é Kubernetes + Container Registry. O container expõe a porta `8787`, inicializa as migrações no mesmo volume `/data` antes de servir e persiste o D1/R2 local do runtime nesse volume. O manifesto de referência está em `infra/magalu/kubernetes.yaml`.
+
+Com a conta Magalu Cloud ativada e Docker, `mgc` e `kubectl` configurados:
+
+```powershell
+docker build -t container-registry.br-se1.magalu.cloud/entre/entre:latest .
+mgc container-registry registries create --name entre
+mgc container-registry credentials get
+docker login container-registry.br-se1.magalu.cloud
+docker push container-registry.br-se1.magalu.cloud/entre/entre:latest
+mgc kubernetes cluster kubeconfig get --cluster-id <cluster-id> > kubeconfig.yaml
+$env:KUBECONFIG = "$(Resolve-Path .\\kubeconfig.yaml)"
+kubectl apply -f infra/magalu/kubernetes.yaml
+kubectl -n entre get service entre
+```
+
+O serviço permanece `ClusterIP` de propósito: ele não deve ser exposto diretamente à internet. Coloque um gateway de identidade na frente, remova qualquer `oai-*` recebido do cliente e injete os cabeçalhos verificados junto de `x-entre-identity-signature`. A assinatura é HMAC-SHA256, em Base64URL, sobre `{"userId":"...","email":"...","fullName":"..."}`. O `IDENTITY_REQUIRE_SIGNATURE=true` vale somente para esse manifesto Magalu; o deploy Sites continua usando a identidade verificada nativa da plataforma. Crie o segredo fora do repositório antes de aplicar o Deployment:
+
+```powershell
+kubectl -n entre create secret generic entre-identity-gateway --from-literal=hmac-secret='<valor-fornecido-ao-gateway>'
+```
+
+Sem esse gateway e esse segredo, a aplicação continua pública apenas para leitura e rejeita ações autenticadas, evitando que cabeçalhos forjados representem outra pessoa.
+
+Para produção com múltiplas réplicas, substitua o armazenamento local por DBaaS e Object Storage da Magalu Cloud. O manifesto inicial usa uma réplica e PVC para manter o estado do MVP sem esconder essa limitação.
 
 ## Estrutura
 

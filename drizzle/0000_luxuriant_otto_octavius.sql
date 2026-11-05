@@ -1,4 +1,4 @@
-CREATE TABLE `blocks` (
+CREATE TABLE IF NOT EXISTS `blocks` (
 	`user_id` text NOT NULL,
 	`blocked_id` text NOT NULL,
 	PRIMARY KEY(`user_id`, `blocked_id`),
@@ -6,7 +6,7 @@ CREATE TABLE `blocks` (
 	FOREIGN KEY (`blocked_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
-CREATE TABLE `bookmarks` (
+CREATE TABLE IF NOT EXISTS `bookmarks` (
 	`user_id` text NOT NULL,
 	`post_id` text NOT NULL,
 	PRIMARY KEY(`user_id`, `post_id`),
@@ -14,7 +14,7 @@ CREATE TABLE `bookmarks` (
 	FOREIGN KEY (`post_id`) REFERENCES `posts`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
-CREATE TABLE `comments` (
+CREATE TABLE IF NOT EXISTS `comments` (
 	`id` text PRIMARY KEY NOT NULL,
 	`user_id` text NOT NULL,
 	`post_id` text NOT NULL,
@@ -24,8 +24,8 @@ CREATE TABLE `comments` (
 	FOREIGN KEY (`post_id`) REFERENCES `posts`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
-CREATE INDEX `comments_post_idx` ON `comments` (`post_id`);--> statement-breakpoint
-CREATE TABLE `communities` (
+CREATE INDEX IF NOT EXISTS `comments_post_idx` ON `comments` (`post_id`);--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS `communities` (
 	`id` text PRIMARY KEY NOT NULL,
 	`name` text NOT NULL,
 	`description` text NOT NULL,
@@ -37,7 +37,7 @@ CREATE TABLE `communities` (
 	FOREIGN KEY (`owner_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE no action
 );
 --> statement-breakpoint
-CREATE TABLE `follows` (
+CREATE TABLE IF NOT EXISTS `follows` (
 	`follower_id` text NOT NULL,
 	`following_id` text NOT NULL,
 	PRIMARY KEY(`follower_id`, `following_id`),
@@ -45,7 +45,7 @@ CREATE TABLE `follows` (
 	FOREIGN KEY (`following_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
-CREATE TABLE `memberships` (
+CREATE TABLE IF NOT EXISTS `memberships` (
 	`user_id` text NOT NULL,
 	`community_id` text NOT NULL,
 	PRIMARY KEY(`user_id`, `community_id`),
@@ -53,7 +53,7 @@ CREATE TABLE `memberships` (
 	FOREIGN KEY (`community_id`) REFERENCES `communities`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
-CREATE TABLE `messages` (
+CREATE TABLE IF NOT EXISTS `messages` (
 	`id` text PRIMARY KEY NOT NULL,
 	`from_id` text NOT NULL,
 	`to_id` text NOT NULL,
@@ -64,9 +64,9 @@ CREATE TABLE `messages` (
 	FOREIGN KEY (`to_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
-CREATE INDEX `messages_recipient_idx` ON `messages` (`to_id`,`created_at`);--> statement-breakpoint
-CREATE INDEX `messages_sender_idx` ON `messages` (`from_id`,`created_at`);--> statement-breakpoint
-CREATE TABLE `notifications` (
+CREATE INDEX IF NOT EXISTS `messages_recipient_idx` ON `messages` (`to_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS `messages_sender_idx` ON `messages` (`from_id`,`created_at`);--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS `notifications` (
 	`id` text PRIMARY KEY NOT NULL,
 	`user_id` text NOT NULL,
 	`actor_id` text NOT NULL,
@@ -78,8 +78,8 @@ CREATE TABLE `notifications` (
 	FOREIGN KEY (`actor_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
-CREATE INDEX `notifications_recipient_idx` ON `notifications` (`user_id`,`created_at`);--> statement-breakpoint
-CREATE TABLE `posts` (
+CREATE INDEX IF NOT EXISTS `notifications_recipient_idx` ON `notifications` (`user_id`,`created_at`);--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS `posts` (
 	`id` text PRIMARY KEY NOT NULL,
 	`user_id` text NOT NULL,
 	`community_id` text,
@@ -93,10 +93,10 @@ CREATE TABLE `posts` (
 	FOREIGN KEY (`community_id`) REFERENCES `communities`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
-CREATE INDEX `posts_time_idx` ON `posts` (`created_at`);--> statement-breakpoint
-CREATE INDEX `posts_user_idx` ON `posts` (`user_id`);--> statement-breakpoint
-CREATE INDEX `posts_community_idx` ON `posts` (`community_id`);--> statement-breakpoint
-CREATE TABLE `reactions` (
+CREATE INDEX IF NOT EXISTS `posts_time_idx` ON `posts` (`created_at`);--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS `posts_user_idx` ON `posts` (`user_id`);--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS `posts_community_idx` ON `posts` (`community_id`);--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS `reactions` (
 	`user_id` text NOT NULL,
 	`post_id` text NOT NULL,
 	`value` integer NOT NULL,
@@ -105,7 +105,7 @@ CREATE TABLE `reactions` (
 	FOREIGN KEY (`post_id`) REFERENCES `posts`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
-CREATE TABLE `reports` (
+CREATE TABLE IF NOT EXISTS `reports` (
 	`id` text PRIMARY KEY NOT NULL,
 	`user_id` text NOT NULL,
 	`post_id` text NOT NULL,
@@ -115,8 +115,8 @@ CREATE TABLE `reports` (
 	FOREIGN KEY (`post_id`) REFERENCES `posts`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
-CREATE UNIQUE INDEX `reports_once_idx` ON `reports` (`user_id`,`post_id`);--> statement-breakpoint
-CREATE TABLE `reposts` (
+CREATE UNIQUE INDEX IF NOT EXISTS `reports_once_idx` ON `reports` (`user_id`,`post_id`);--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS `reposts` (
 	`user_id` text NOT NULL,
 	`post_id` text NOT NULL,
 	`created_at` integer NOT NULL,
@@ -125,7 +125,7 @@ CREATE TABLE `reposts` (
 	FOREIGN KEY (`post_id`) REFERENCES `posts`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
-CREATE TABLE `testimonials` (
+CREATE TABLE IF NOT EXISTS `testimonials` (
 	`id` text PRIMARY KEY NOT NULL,
 	`from_id` text NOT NULL,
 	`to_id` text NOT NULL,
@@ -136,8 +136,8 @@ CREATE TABLE `testimonials` (
 	FOREIGN KEY (`to_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
-CREATE INDEX `testimonials_recipient_idx` ON `testimonials` (`to_id`);--> statement-breakpoint
-CREATE TABLE `users` (
+CREATE INDEX IF NOT EXISTS `testimonials_recipient_idx` ON `testimonials` (`to_id`);--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS `users` (
 	`id` text PRIMARY KEY NOT NULL,
 	`handle` text NOT NULL,
 	`name` text NOT NULL,
@@ -149,4 +149,4 @@ CREATE TABLE `users` (
 	`created_at` integer NOT NULL
 );
 --> statement-breakpoint
-CREATE UNIQUE INDEX `users_handle_unique` ON `users` (`handle`);
+CREATE UNIQUE INDEX IF NOT EXISTS `users_handle_unique` ON `users` (`handle`);
