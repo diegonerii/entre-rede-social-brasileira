@@ -108,6 +108,7 @@ function Feed({ filter = "", empty = "Ainda não há publicações por aqui." }:
     const generation = feedGeneration.current;
     let live = true;
     const boundaryId = posts.at(-1)?.id;
+    const targetCount = posts.length;
     const snapshotIds = new Set(posts.map(post => post.id));
     (async () => {
       let page = await api<FeedResponse>(feedUrl());
@@ -117,6 +118,9 @@ function Feed({ filter = "", empty = "Ainda não há publicações por aqui." }:
         for (let attempt = 0; attempt < 100; attempt += 1) {
           refreshed.push(...page.posts);
           if (page.posts.some(post => post.id === boundaryId)) { reachedBoundary = true; break; }
+          // If the old boundary was deleted, fetch only enough rows to refill
+          // the already-rendered window instead of scanning the whole feed.
+          if (refreshed.length >= targetCount) { reachedBoundary = true; break; }
           if (!page.cursor) { reachedBoundary = true; break; }
           page = await api<FeedResponse>(feedUrl(page.cursor));
         }
