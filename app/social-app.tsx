@@ -99,11 +99,12 @@ function Feed({ filter = "", empty = "Ainda não há publicações por aqui." }:
   type FeedResponse = { posts: Post[]; cursor: string | null };
   type FeedPost = Post & { cursor?: number; relevance?: number };
   const feedGeneration = useRef(0);
+  const loadedFilter = useRef<string | null>(null);
   const feedUrl = (nextCursor?: string | null) => `feed?${filter}${nextCursor ? `&cursor=${encodeURIComponent(nextCursor)}` : ""}`;
   const [posts, setPosts] = useState<Post[] | null>(null), [cursor, setCursor] = useState<string | null>(null), [error, setError] = useState(""), [more, setMore] = useState(false), [retry, setRetry] = useState(0);
-  useEffect(() => { const generation = ++feedGeneration.current; let live = true; setPosts(null); setCursor(null); setError(""); api<FeedResponse>(feedUrl()).then(d => { if (live && generation === feedGeneration.current) { setPosts(d.posts); setCursor(d.cursor); } }).catch(e => { if (live && generation === feedGeneration.current) setError(e.message); }); return () => { live = false; }; }, [filter, retry]);
+  useEffect(() => { const generation = ++feedGeneration.current; let live = true; loadedFilter.current = null; setPosts(null); setCursor(null); setError(""); api<FeedResponse>(feedUrl()).then(d => { if (live && generation === feedGeneration.current) { loadedFilter.current = filter; setPosts(d.posts); setCursor(d.cursor); } }).catch(e => { if (live && generation === feedGeneration.current) setError(e.message); }); return () => { live = false; }; }, [filter, retry]);
   useEffect(() => {
-    if (!revision || !posts) return;
+    if (!revision || !posts || loadedFilter.current !== filter) return;
     const generation = feedGeneration.current;
     let live = true;
     const boundaryId = posts.at(-1)?.id;
