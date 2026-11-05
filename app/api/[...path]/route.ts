@@ -11,6 +11,7 @@ async function handler(request: Request) {
   // Magalu gateway opts into the additional HMAC check.
   const signatureRequired = identityFlag === "true";
   const rawIdentity = await getChatGPTUser();
+  // verifyChatGPTUser fails closed when the required secret is unavailable.
   const identity = signatureRequired ? await verifyChatGPTUser(request, rawIdentity, identitySecret, false) : rawIdentity;
   return handleApi(request, {
     db: env.DB, bucket: env.BUCKET,
